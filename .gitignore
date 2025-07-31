@@ -1,0 +1,47 @@
+# Build artifacts
+build/
+.pio/
+*.bin
+*.elf
+*.map
+
+# Generated validation files
+esp32_genicam.xml
+*.xml.tmp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.cache
+
+# Python artifacts (if any Python tools are added)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Documentation build artifacts
+docs/_build/
+*.pdf
+
+# Platform-specific
+.platformio/
+.pio/
+compile_commands.json
