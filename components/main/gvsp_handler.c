@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_task_wdt.h"
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
@@ -14,10 +15,16 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_timer.h"
+// Include sys/socket.h for struct sockaddr_in in header
+#include <sys/socket.h>
 
 static const char *TAG = "gvsp_handler";
 
 static int gvsp_sock = -1;
+
+// Forward declarations
+static esp_err_t gvsp_handle_connection_failure(void);
+static esp_err_t gvsp_check_recovery_timeout(void);
 static bool streaming_active = false;
 static uint32_t block_id = 0;
 static uint16_t packet_id = 0;
@@ -184,7 +191,7 @@ static esp_err_t gvsp_recreate_socket(void)
 }
 
 // Frame ring buffer management
-static esp_err_t gvsp_store_frame_in_ring(camera_fb_t *fb, uint32_t block_id_used)
+static esp_err_t gvsp_store_frame_in_ring(local_camera_fb_t *fb, uint32_t block_id_used)
 {
     if (frame_ring_mutex == NULL || fb == NULL || fb->buf == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -236,7 +243,7 @@ static esp_err_t gvsp_store_frame_in_ring(camera_fb_t *fb, uint32_t block_id_use
     return ESP_OK;
 }
 
-static esp_err_t gvsp_get_frame_from_ring(uint32_t block_id, camera_fb_t *fb_out)
+static esp_err_t gvsp_get_frame_from_ring(uint32_t block_id, local_camera_fb_t *fb_out)
 {
     if (frame_ring_mutex == NULL || fb_out == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -318,7 +325,7 @@ static esp_err_t gvsp_validate_frame_sequence(uint32_t received_sequence)
         duplicate_frames++;
         ESP_LOGW(TAG, "Duplicate frame detected: received=%d, last=%d (total duplicates: %d)", 
                  received_sequence, last_received_sequence, duplicate_frames);
-        return ESP_ERR_DUPLICATE_VALUE;
+        return ESP_ERR_INVALID_STATE;
     }
     
     // Check for out-of-order or lost frames
@@ -589,7 +596,7 @@ static esp_err_t gvsp_send_trailer_packet(uint32_t height)
     return err;
 }
 
-esp_err_t gvsp_send_frame(camera_fb_t *fb)
+esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
 {
     if (!streaming_active || !client_addr_set) {
         return ESP_ERR_INVALID_STATE;
@@ -608,7 +615,7 @@ esp_err_t gvsp_send_frame(camera_fb_t *fb)
     if (seq_err != ESP_OK) {
         // Log sequence issues but continue transmission
         switch (seq_err) {
-            case ESP_ERR_DUPLICATE_VALUE:
+            case ESP_ERR_INVALID_STATE:
                 ESP_LOGW(TAG, "Duplicate frame sequence detected for block_id %d", block_id);
                 break;
             case ESP_ERR_NOT_FOUND:
@@ -688,7 +695,12 @@ void gvsp_task(void *pvParameters)
     ESP_LOGI(TAG, "GVSP task started");
     last_heartbeat_check = esp_log_timestamp();
     
+    // Add this task to watchdog monitoring
+    esp_task_wdt_add(NULL);
+    
     while (1) {
+        // Feed the watchdog 
+        esp_task_wdt_reset();
         uint32_t current_time = esp_log_timestamp();
         
         // Enhanced heartbeat and recovery management
@@ -723,7 +735,7 @@ void gvsp_task(void *pvParameters)
         // Check if streaming is active
         if (gvsp_is_streaming() && client_addr_set) {
             // Capture a frame
-            camera_fb_t *fb = NULL;
+            local_camera_fb_t *fb = NULL;
             esp_err_t ret = camera_capture_frame(&fb);
             
             if (ret == ESP_OK && fb != NULL) {
@@ -929,7 +941,7 @@ uint32_t gvsp_get_frames_stored_in_ring(void)
 
 esp_err_t gvsp_resend_frame(uint32_t block_id)
 {
-    camera_fb_t fb_temp;
+    local_camera_fb_t fb_temp;
     esp_err_t err = gvsp_get_frame_from_ring(block_id, &fb_temp);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Cannot resend frame with block_id %d - not found in ring", block_id);

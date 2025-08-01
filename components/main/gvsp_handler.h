@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
 
 #define GVSP_PORT 50010
 #define GVSP_MAX_PACKET_SIZE 1500
@@ -60,7 +61,7 @@ esp_err_t gvsp_start_streaming(void);
 esp_err_t gvsp_stop_streaming(void);
 bool gvsp_is_streaming(void);
 void gvsp_task(void *pvParameters);
-esp_err_t gvsp_send_frame(camera_fb_t *fb);
+esp_err_t gvsp_send_frame(local_camera_fb_t *fb);
 esp_err_t gvsp_set_client_address(struct sockaddr_in *addr);
 esp_err_t gvsp_clear_client_address(void);
 void gvsp_update_client_activity(void);

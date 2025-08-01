@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_task_wdt.h"
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
@@ -21,7 +22,12 @@
 static const char *TAG = "gvcp_handler";
 
 static int sock = -1;
-static uint8_t bootstrap_memory[GVBS_DISCOVERY_DATA_SIZE];
+// Bootstrap memory needs to be large enough to hold XML URL at offset 0x200 + URL size
+#define BOOTSTRAP_MEMORY_SIZE 0x300
+static uint8_t bootstrap_memory[BOOTSTRAP_MEMORY_SIZE];
+
+// Forward declarations
+static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
 
 // Error handling statistics
 static uint32_t total_commands_received = 0;
@@ -102,8 +108,10 @@ static void init_bootstrap_memory(void)
     strncpy((char*)&bootstrap_memory[GVBS_SERIAL_NUMBER_OFFSET], DEVICE_SERIAL, 16);
     strncpy((char*)&bootstrap_memory[GVBS_USER_DEFINED_NAME_OFFSET], DEVICE_USER_NAME, 16);
     
-    // XML URL
-    strncpy((char*)&bootstrap_memory[GVBS_XML_URL_0_OFFSET], XML_URL, 512);
+    // XML URL (safe size: BOOTSTRAP_MEMORY_SIZE - GVBS_XML_URL_0_OFFSET)
+    size_t xml_url_max_size = BOOTSTRAP_MEMORY_SIZE - GVBS_XML_URL_0_OFFSET;
+    strncpy((char*)&bootstrap_memory[GVBS_XML_URL_0_OFFSET], XML_URL, xml_url_max_size - 1);
+    bootstrap_memory[GVBS_XML_URL_0_OFFSET + xml_url_max_size - 1] = '\0'; // Ensure null termination
 }
 
 esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, struct sockaddr_in *client_addr)
@@ -164,6 +172,16 @@ esp_err_t gvcp_init(void)
         return ESP_FAIL;
     }
 
+    // Set socket receive timeout to prevent watchdog timeout
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        ESP_LOGE(TAG, "Failed to set socket receive timeout");
+        close(sock);
+        return ESP_FAIL;
+    }
+
     int err = bind(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err < 0) {
         ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
@@ -214,6 +232,17 @@ static esp_err_t gvcp_recreate_socket(void)
     int broadcast = 1;
     if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
         ESP_LOGE(TAG, "Failed to set socket broadcast option after recreation");
+        close(sock);
+        sock = -1;
+        return ESP_FAIL;
+    }
+
+    // Set socket receive timeout to prevent watchdog timeout
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        ESP_LOGE(TAG, "Failed to set socket receive timeout after recreation");
         close(sock);
         sock = -1;
         return ESP_FAIL;
@@ -367,7 +396,7 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
     // Copy memory data
     uint8_t *data_ptr = &response[sizeof(gvcp_header_t) + 4];
     
-    if (address < GVBS_DISCOVERY_DATA_SIZE && address + size <= GVBS_DISCOVERY_DATA_SIZE) {
+    if (address < BOOTSTRAP_MEMORY_SIZE && address + size <= BOOTSTRAP_MEMORY_SIZE) {
         // Bootstrap memory region
         memcpy(data_ptr, &bootstrap_memory[address], size);
     } else if (address >= XML_BASE_ADDRESS && address < XML_BASE_ADDRESS + genicam_xml_size) {
@@ -680,13 +709,11 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
     }
     
     // Handle different write regions
-    bool write_successful = false;
     
     if (address >= GVBS_USER_DEFINED_NAME_OFFSET && 
         address + size <= GVBS_USER_DEFINED_NAME_OFFSET + 16) {
         // Bootstrap user-defined name
         memcpy(&bootstrap_memory[address], write_data, size);
-        write_successful = true;
         ESP_LOGI(TAG, "Write successful to bootstrap address 0x%08x", address);
     } else if (address == GENICAM_ACQUISITION_START_OFFSET && size >= 4) {
         // Acquisition start command
@@ -699,7 +726,6 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             // Set streaming active bit
             connection_status |= 0x08;
         }
-        write_successful = true;
     } else if (address == GENICAM_ACQUISITION_STOP_OFFSET && size >= 4) {
         // Acquisition stop command
         uint32_t command_value = ntohl(*(uint32_t*)write_data);
@@ -712,20 +738,17 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             // Clear streaming active bit and client connected bit
             connection_status &= ~(0x08 | 0x04);
         }
-        write_successful = true;
     } else if (address == GENICAM_ACQUISITION_MODE_OFFSET && size >= 4) {
         // Acquisition mode
         acquisition_mode = ntohl(*(uint32_t*)write_data);
         ESP_LOGI(TAG, "Acquisition mode set to: %d", acquisition_mode);
-        write_successful = true;
     } else if (address == GENICAM_PIXEL_FORMAT_OFFSET && size >= 4) {
         // Pixel format
         uint32_t format_value = ntohl(*(uint32_t*)write_data);
         esp_err_t ret = camera_set_genicam_pixformat(format_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Pixel format set to: 0x%08X", format_value);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set pixel format: 0x%08X", format_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -736,8 +759,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         if (new_delay >= 100 && new_delay <= 100000) { // 0.1ms to 100ms range
             packet_delay_us = new_delay;
             ESP_LOGI(TAG, "Packet delay set to: %d microseconds", packet_delay_us);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Packet delay %d out of range (100-100000 us)", new_delay);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -748,8 +770,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         if (new_fps >= 1 && new_fps <= 30) { // 1-30 FPS range
             frame_rate_fps = new_fps;
             ESP_LOGI(TAG, "Frame rate set to: %d FPS", frame_rate_fps);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Frame rate %d out of range (1-30 FPS)", new_fps);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -760,8 +781,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         if (new_size >= 512 && new_size <= GVSP_DATA_PACKET_SIZE) {
             packet_size = new_size;
             ESP_LOGI(TAG, "Packet size set to: %d bytes", packet_size);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Packet size %d out of range (512-%d bytes)", new_size, GVSP_DATA_PACKET_SIZE);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -772,8 +792,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         esp_err_t ret = camera_set_jpeg_quality(quality_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "JPEG quality set to: %d", quality_value);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set JPEG quality: %d", quality_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -784,8 +803,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         esp_err_t ret = camera_set_exposure_time(exposure_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Exposure time set to: %lu us", exposure_value);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set exposure time: %lu us", exposure_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -796,8 +814,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         esp_err_t ret = camera_set_gain((int)gain_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Gain set to: %d dB", (int)gain_value);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set gain: %d dB", (int)gain_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -808,8 +825,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         esp_err_t ret = camera_set_brightness(brightness_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Brightness set to: %d", brightness_value);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set brightness: %d", brightness_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -820,8 +836,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         esp_err_t ret = camera_set_contrast(contrast_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Contrast set to: %d", contrast_value);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set contrast: %d", contrast_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -832,8 +847,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         esp_err_t ret = camera_set_saturation(saturation_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Saturation set to: %d", saturation_value);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set saturation: %d", saturation_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -844,8 +858,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         esp_err_t ret = camera_set_white_balance_mode((int)wb_value);
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "White balance mode set to: %s", wb_value == 0 ? "OFF" : "AUTO");
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set white balance mode: %d", (int)wb_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -858,8 +871,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             const char* mode_str = trigger_value == 0 ? "OFF" : 
                                   trigger_value == 1 ? "ON" : "SOFTWARE";
             ESP_LOGI(TAG, "Trigger mode set to: %s", mode_str);
-            write_successful = true;
-        } else {
+            } else {
             ESP_LOGW(TAG, "Failed to set trigger mode: %d", (int)trigger_value);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
@@ -962,7 +974,12 @@ void gvcp_task(void *pvParameters)
 
     ESP_LOGI(TAG, "GVCP task started");
 
+    // Add this task to watchdog monitoring
+    esp_task_wdt_add(NULL);
+
     while (1) {
+        // Feed the watchdog 
+        esp_task_wdt_reset();
         struct sockaddr_in source_addr;
         socklen_t socklen = sizeof(source_addr);
         
@@ -970,6 +987,12 @@ void gvcp_task(void *pvParameters)
                           (struct sockaddr *)&source_addr, &socklen);
 
         if (len < 0) {
+            // Handle timeout separately from errors
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket timeout - this is normal, just continue
+                continue;
+            }
+            
             ESP_LOGE(TAG, "recvfrom failed: errno %d (%s)", errno, strerror(errno));
             gvcp_socket_error_count++;
             

@@ -14,19 +14,25 @@ This is a **fully functional GenICam/GigE Vision camera implementation** for ESP
 - ✅ Image format conversion (JPEG/YUV422→Mono8)
 - ✅ Complete development and testing toolchain
 
-## Development Commands (Primary Workflow)
+## Development Commands (ESP-IDF Native)
+
+### Prerequisites
+- ESP-IDF v4.4+ installed and environment sourced (`source ~/esp/esp-idf/export.sh`)
+- just command runner installed
+- WiFi credentials configured (see WiFi Configuration section)
 
 ### Quick Development Workflow (using justfile - RECOMMENDED)
 ```bash
-# Setup development environment
+# Setup development environment (ESP-IDF must be installed and sourced)
 just setup
 
-# Complete development cycle: validate XML, build, flash, and monitor
+# Complete development cycle: set target, validate XML, build, flash, and monitor
 just dev [port]
 
 # Individual commands
+just set-target        # Set ESP-IDF target to esp32
 just validate          # Validate GenICam XML schema compliance
-just build             # Build ESP32 project
+just build             # Build ESP32 project with ESP-IDF
 just flash [port]      # Flash to ESP32-CAM
 just monitor [port]    # Monitor serial output
 just clean             # Clean build artifacts
@@ -73,24 +79,37 @@ just show-xml
 # Get help configuring WiFi
 just wifi-config
 
-# WiFi credentials are configured in platformio.ini via build flags:
-; -D CONFIG_ESP_WIFI_SSID="YourWiFiSSID"
-; -D CONFIG_ESP_WIFI_PASSWORD="YourWiFiPassword"
+# WiFi credentials are configured via environment variables (REQUIRED):
+# Use environment variables with .envrc (recommended)
+export WIFI_SSID="YOUR_WIFI_NETWORK_NAME"
+export WIFI_PASSWORD="YOUR_WIFI_PASSWORD"
+
+# Alternative: Use menuconfig (after setting environment variables)
+just config  # Opens ESP-IDF configuration menu
 ```
 
-### Legacy PlatformIO Commands (Alternative Method)
+### Direct ESP-IDF Commands (Alternative Method)
 ```bash
+# Set target (first time setup)
+idf.py set-target esp32
+
 # Build the project
-pio run
+idf.py build
 
 # Flash to ESP32-CAM (adjust port as needed)
-pio run --target upload --upload-port /dev/ttyUSB0
+idf.py -p /dev/ttyUSB0 flash
 
 # Monitor serial output
-pio device monitor --port /dev/ttyUSB0 --baud 115200
+idf.py -p /dev/ttyUSB0 monitor
 
-# Build and flash in one command
-pio run --target upload --upload-port /dev/ttyUSB0 && pio device monitor --port /dev/ttyUSB0 --baud 115200
+# Build, flash and monitor in one command
+idf.py -p /dev/ttyUSB0 flash monitor
+
+# Additional ESP-IDF commands
+idf.py menuconfig       # Configuration menu
+idf.py size             # Show memory usage
+idf.py erase_flash      # Erase flash memory
+idf.py fullclean        # Full clean
 ```
 
 ## Code Architecture (Fully Implemented)
@@ -125,7 +144,7 @@ pio run --target upload --upload-port /dev/ttyUSB0 && pio device monitor --port 
 
 ### Hardware Configuration - Production Ready
 
-**ESP32-CAM Pin Configuration** (in `platformio.ini`):
+**ESP32-CAM Pin Configuration** (in `sdkconfig.defaults`):
 - Camera module: AI-Thinker ESP32-CAM board
 - Resolution: 320x240 pixels (QVGA) 
 - Format: Mono8 (8-bit grayscale converted from JPEG/YUV422)
@@ -150,7 +169,7 @@ pio run --target upload --upload-port /dev/ttyUSB0 && pio device monitor --port 
 
 ## Project Structure Notes
 
-This is a **complete, working** PlatformIO ESP-IDF project implementing a GenICam-compatible camera for testing industrial vision software. The implementation provides full GigE Vision protocol compliance over WiFi.
+This is a **complete, working** ESP-IDF native project implementing a GenICam-compatible camera for testing industrial vision software. The implementation provides full GigE Vision protocol compliance over WiFi.
 
 **Key Implementation Details:**
 - Real ESP32-CAM hardware integration (not simulation)

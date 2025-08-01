@@ -1,0 +1,144 @@
+menu "ESP32-CAM GenICam Configuration"
+
+    menu "Camera Pin Configuration"
+        config CAMERA_PIN_PWDN
+            int "Camera Power Down Pin"
+            default 32
+            help
+                GPIO pin connected to the camera's power down pin.
+                Set to -1 to disable.
+
+        config CAMERA_PIN_RESET
+            int "Camera Reset Pin"
+            default -1
+            help
+                GPIO pin connected to the camera's reset pin.
+                Set to -1 to disable.
+
+        config CAMERA_PIN_XCLK
+            int "Camera XCLK Pin"
+            default 0
+            help
+                GPIO pin connected to the camera's external clock input.
+
+        config CAMERA_PIN_SIOD
+            int "Camera SIOD Pin (I2C Data)"
+            default 26
+            help
+                GPIO pin connected to the camera's I2C data line.
+
+        config CAMERA_PIN_SIOC
+            int "Camera SIOC Pin (I2C Clock)"
+            default 27
+            help
+                GPIO pin connected to the camera's I2C clock line.
+
+        config CAMERA_PIN_D7
+            int "Camera Data Pin 7"
+            default 35
+            help
+                GPIO pin connected to camera data line 7.
+
+        config CAMERA_PIN_D6
+            int "Camera Data Pin 6"
+            default 34
+            help
+                GPIO pin connected to camera data line 6.
+
+        config CAMERA_PIN_D5
+            int "Camera Data Pin 5"
+            default 39
+            help
+                GPIO pin connected to camera data line 5.
+
+        config CAMERA_PIN_D4
+            int "Camera Data Pin 4"
+            default 36
+            help
+                GPIO pin connected to camera data line 4.
+
+        config CAMERA_PIN_D3
+            int "Camera Data Pin 3"
+            default 21
+            help
+                GPIO pin connected to camera data line 3.
+
+        config CAMERA_PIN_D2
+            int "Camera Data Pin 2"
+            default 19
+            help
+                GPIO pin connected to camera data line 2.
+
+        config CAMERA_PIN_D1
+            int "Camera Data Pin 1"
+            default 18
+            help
+                GPIO pin connected to camera data line 1.
+
+        config CAMERA_PIN_D0
+            int "Camera Data Pin 0"
+            default 5
+            help
+                GPIO pin connected to camera data line 0.
+
+        config CAMERA_PIN_VSYNC
+            int "Camera VSYNC Pin"
+            default 25
+            help
+                GPIO pin connected to camera vertical sync.
+
+        config CAMERA_PIN_HREF
+            int "Camera HREF Pin"
+            default 23
+            help
+                GPIO pin connected to camera horizontal reference.
+
+        config CAMERA_PIN_PCLK
+            int "Camera PCLK Pin"
+            default 22
+            help
+                GPIO pin connected to camera pixel clock.
+    endmenu
+
+    menu "Status LED Configuration"
+        config STATUS_LED_GPIO
+            int "Status LED GPIO Pin"
+            default 33
+            help
+                GPIO pin connected to the status LED.
+
+        config STATUS_LED_INVERTED
+            bool "Status LED is inverted (active low)"
+            default y
+            help
+                Enable if the LED is active low (turns on when GPIO is 0).
+                This is typical for built-in LEDs on ESP32-CAM boards.
+    endmenu
+
+    menu "WiFi Configuration"
+        config ESP_WIFI_SSID
+            string "WiFi SSID"
+            default ""
+            help
+                SSID (network name) for the camera to connect to.
+                Set via environment variable WIFI_SSID during build.
+
+        config ESP_WIFI_PASSWORD
+            string "WiFi Password"
+            default ""
+            help
+                WiFi password (WPA or WPA2) for the camera to connect to.
+                Set via environment variable WIFI_PASSWORD during build.
+    endmenu
+
+    menu "Optional Features"
+        config ENABLE_WEB_SERVER
+            bool "Enable Web Server"
+            default n
+            help
+                Enable the built-in web server for camera configuration and status.
+                Disabling this saves significant memory (reduces DRAM usage by ~200KB).
+                The GenICam protocol will still work without the web server.
+    endmenu
+
+endmenu
