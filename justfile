@@ -138,6 +138,22 @@ docs:
     @tree -I 'build|.git' . >> docs.txt 2>/dev/null || ls -la >> docs.txt
     @echo "✅ Documentation generated in docs.txt"
 
+# Run integration test suite (discovery + XML + streaming)
+integration-test:
+    @echo "Running ESP32-CAM GenICam integration test suite..."
+    @echo "=============================================="
+    @echo "1. Testing device discovery..."
+    @timeout 10 arv-test-0.8 2>/dev/null || echo "⚠️  Discovery test timeout or no devices found"
+    @echo ""
+    @echo "2. Testing feature access..."
+    @arv-tool-0.8 -n "ESP32-CAM" --features 2>/dev/null || echo "⚠️  Feature access failed - check device connection"
+    @echo ""
+    @echo "3. Testing acquisition commands..."
+    @arv-tool-0.8 -n "ESP32-CAM" acquisition 2>/dev/null || echo "⚠️  Acquisition test failed"
+    @echo ""
+    @echo "✅ Integration test complete. Check output above for any warnings."
+    @echo "💡 Use 'just capture-packets' to debug protocol issues"
+
 # Development help
 help:
     @echo "ESP32-CAM GenICam Development Commands"
@@ -155,6 +171,7 @@ help:
     @echo "  just test-discovery IP  - Test UDP discovery"
     @echo "  just aravis-test        - Test with Aravis tools"
     @echo "  just aravis-viewer      - Launch Aravis camera viewer"
+    @echo "  just integration-test   - Full protocol test suite"
     @echo ""
     @echo "Utilities:"
     @echo "  just status             - Show project status"

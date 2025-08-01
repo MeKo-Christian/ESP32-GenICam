@@ -10,6 +10,7 @@
 #include "camera_handler.h"
 #include "gvcp_handler.h"
 #include "gvsp_handler.h"
+#include "status_led.h"
 
 static const char *TAG = "esp32_genicam";
 
@@ -18,6 +19,9 @@ void app_main(void)
     esp_err_t ret;
 
     ESP_LOGI(TAG, "ESP32 GenICam Camera starting...");
+
+    ESP_LOGI(TAG, "Initializing status LED...");
+    ESP_ERROR_CHECK(status_led_init());
 
     ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -46,4 +50,5 @@ void app_main(void)
     xTaskCreate(gvsp_task, "gvsp_task", 4096, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "ESP32 GenICam Camera initialized successfully");
+    status_led_set_state(LED_STATE_ON);
 }

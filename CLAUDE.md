@@ -160,3 +160,49 @@ This is a **complete, working** PlatformIO ESP-IDF project implementing a GenICa
 - Production-ready development toolchain with justfile automation
 
 The `components/esp32-camera/` directory contains the ESP32 camera driver integration for real hardware support.
+
+## Development Improvement Opportunities
+
+While the core implementation is complete and functional, these enhancements could improve stability and performance:
+
+### Stability & Error Handling
+```bash
+# Consider implementing these improvements:
+# - GVCP NACK responses for unknown commands
+# - Frame buffer ring for resend capability  
+# - Connection health monitoring and recovery
+```
+
+### Performance Optimizations
+```bash
+# Performance enhancement opportunities:
+# - Use esp_timer_get_time() for precise GVSP timestamps
+# - Implement DMA or double-buffering for camera capture
+# - Optimize packet timing based on network conditions
+```
+
+### Testing & Validation
+```bash
+# Automated testing improvements:
+# - Integration test script with arv-tool + tshark
+# - Protocol compliance validation
+# - Performance benchmarking tools
+
+# Example integration test concept:
+# 1. arv-tool discovery test
+# 2. XML download validation  
+# 3. Acquisition start/stop cycle
+# 4. First frame capture verification
+```
+
+### Network Debugging Tools
+```bash
+# Wireshark filter for protocol analysis:
+udp.port == 3956 || udp.port == 50010
+
+# Protocol packet flow analysis:
+# GVCP (3956): Discovery, registers, XML, control
+# GVSP (50010): Leader → Data packets → Trailer
+```
+
+Use these suggestions as guidance for future development iterations or when troubleshooting specific issues in production environments.

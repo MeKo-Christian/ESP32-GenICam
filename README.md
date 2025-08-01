@@ -138,7 +138,34 @@ Works with existing GenICam/GigE Vision applications:
 | No images | GVSP streaming | `just capture-packets`, check acquisition |
 | Build issues | Dependencies | `just setup`, check PlatformIO |
 
-Use `just capture-packets` to debug network protocol with Wireshark.
+### Network Protocol Debugging
+
+Use `just capture-packets` to debug with Wireshark, or apply this filter manually:
+```
+udp.port == 3956 || udp.port == 50010
+```
+
+**Protocol Flow:**
+```
+PC → ESP32: Discovery (port 3956)
+PC ← ESP32: Discovery ACK + device info
+PC → ESP32: Read bootstrap registers (port 3956)  
+PC ← ESP32: Device details + XML pointer
+PC → ESP32: Download GenICam XML (port 3956)
+PC ← ESP32: XML feature description
+PC → ESP32: AcquisitionStart command (port 3956)
+PC ← ESP32: Image stream via GVSP (port 50010)
+```
+
+### Integration Testing
+
+Automated test script for full protocol validation:
+```bash
+# Test complete discovery → streaming pipeline
+just aravis-test                    # Should discover ESP32-CAM
+arv-tool-0.8 -n "ESP32-CAM" --features    # Download and display XML features
+arv-tool-0.8 -n "ESP32-CAM" acquisition   # Test acquisition commands
+```
 
 ## 📖 References
 

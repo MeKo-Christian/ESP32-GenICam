@@ -82,11 +82,31 @@ just capture-packets        # Network protocol debugging
 
 The core implementation is complete and functional. Potential extensions include:
 
-- **Advanced Features** - ExposureTime, Gain, TriggerMode controls
-- **Reliability** - GVSP packet resend support, heartbeat monitoring
-- **Formats** - Additional pixel formats (Bayer, RGB)
-- **Interface** - Web UI or serial configuration interface
-- **Performance** - Optimized packet timing and larger resolutions
+### Stability & Reliability
+- [ ] **GVCP Error Handling** - Add NACK handling and graceful unknown command handling
+- [ ] **Frame Buffering** - Buffer last N frames for basic resend if Aravis requests it
+- [ ] **Heartbeat Monitoring** - Connection health checking and recovery
+
+### Performance Optimizations  
+- [ ] **Precise Timestamps** - Use `esp_timer_get_time()` for GVSP leader/trailer timestamps
+- [ ] **Camera Performance** - DMA or double-buffering for capture to avoid blocking
+- [ ] **Packet Timing** - Optimized delay tuning for different network conditions
+- [ ] **Resolution Scaling** - Support for larger image formats beyond 320x240
+
+### Advanced Features
+- [ ] **Camera Controls** - ExposureTime, Gain, TriggerMode, WhiteBalance
+- [ ] **Pixel Formats** - Additional formats (Bayer, RGB565, YUV422)
+- [ ] **Compression** - JPEG streaming support for higher throughput
+
+### Testing & Automation
+- [ ] **Integration Tests** - Scripted testing using `arv-tool` + `tshark` to confirm full handshake + frame delivery
+- [ ] **Protocol Validation** - Automated compliance testing against GenICam/GigE Vision standards
+- [ ] **Performance Benchmarks** - Frame rate and latency measurement tools
+
+### Interface & Usability
+- [ ] **Web Configuration** - Browser-based camera parameter adjustment
+- [ ] **Serial Interface** - Runtime configuration via UART commands
+- [ ] **Status LEDs** - Visual indicators for connection and streaming status
 
 ## Project Structure
 

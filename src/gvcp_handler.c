@@ -1,6 +1,7 @@
 #include "gvcp_handler.h"
 #include "genicam_xml.h"
 #include "gvsp_handler.h"
+#include "status_led.h"
 
 // Default GVSP packet size if not defined
 #ifndef GVSP_DATA_PACKET_SIZE
@@ -299,6 +300,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         uint32_t command_value = ntohl(*(uint32_t*)write_data);
         if (command_value == 1) {
             ESP_LOGI(TAG, "Acquisition start command received");
+            status_led_set_state(LED_STATE_FAST_BLINK);
             gvsp_start_streaming();
             acquisition_start_reg = 1;
         }
@@ -308,6 +310,7 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         uint32_t command_value = ntohl(*(uint32_t*)write_data);
         if (command_value == 1) {
             ESP_LOGI(TAG, "Acquisition stop command received");
+            status_led_set_state(LED_STATE_ON);
             gvsp_stop_streaming();
             gvsp_clear_client_address();
             acquisition_stop_reg = 1;
