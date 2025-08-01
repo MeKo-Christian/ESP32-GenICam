@@ -15,6 +15,7 @@ static const char* web_interface_html =
 "<html>\n"
 "<head>\n"
 "    <title>ESP32-CAM GenICam Control</title>\n"
+"    <meta charset=\"UTF-8\">\n"
 "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
 "    <style>\n"
 "        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f0f0f0; }\n"
@@ -436,7 +437,7 @@ esp_err_t handle_web_interface_get(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Web interface GET request");
     
-    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_send(req, web_interface_html, HTTPD_RESP_USE_STRLEN);
     
     return ESP_OK;

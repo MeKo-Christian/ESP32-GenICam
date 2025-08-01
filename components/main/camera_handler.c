@@ -2,7 +2,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_camera.h"
-#include "esp_jpg_decode.h"
+#include "jpeg_decoder.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -43,43 +43,6 @@ static size_t format_buffer_size = CAMERA_WIDTH * CAMERA_HEIGHT * 3; // Max size
 // RGB buffer for JPEG decoding (3 bytes per pixel)
 static uint8_t *rgb_decode_buffer = NULL;
 
-// JPEG decoder state
-typedef struct {
-    const uint8_t *data;
-    size_t len;
-    size_t pos;
-} jpeg_read_ctx_t;
-
-// JPEG reader callback for esp_jpg_decode
-static size_t jpeg_reader_cb(void *arg, size_t index, uint8_t *buf, size_t len) {
-    jpeg_read_ctx_t *ctx = (jpeg_read_ctx_t *)arg;
-    if (index + len > ctx->len) {
-        len = ctx->len - index;
-    }
-    if (len > 0) {
-        memcpy(buf, ctx->data + index, len);
-    }
-    return len;
-}
-
-// JPEG writer callback for esp_jpg_decode
-static bool jpeg_writer_cb(void *arg, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t *data) {
-    // Write RGB data to our decode buffer
-    if (rgb_decode_buffer && x + w <= CAMERA_WIDTH && y + h <= CAMERA_HEIGHT) {
-        for (uint16_t row = 0; row < h; row++) {
-            for (uint16_t col = 0; col < w; col++) {
-                size_t rgb_idx = ((y + row) * CAMERA_WIDTH + (x + col)) * 3;
-                size_t src_idx = (row * w + col) * 3;
-                if (rgb_idx + 2 < CAMERA_WIDTH * CAMERA_HEIGHT * 3) {
-                    rgb_decode_buffer[rgb_idx] = data[src_idx];       // R
-                    rgb_decode_buffer[rgb_idx + 1] = data[src_idx + 1]; // G
-                    rgb_decode_buffer[rgb_idx + 2] = data[src_idx + 2]; // B
-                }
-            }
-        }
-    }
-    return true;
-}
 
 // Convert various camera formats to Mono8 grayscale
 // Supported formats: PIXFORMAT_GRAYSCALE, PIXFORMAT_RGB565, PIXFORMAT_YUV422, 
@@ -130,8 +93,8 @@ static void convert_to_mono8(camera_fb_t *src_fb, uint8_t *dst_buf, size_t *dst_
         *dst_len = pixel_count;
         ESP_LOGI(TAG, "Converted YUV422 to grayscale: %d pixels", pixel_count);
     } else if (src_fb->format == PIXFORMAT_JPEG) {
-        // JPEG to grayscale conversion using esp_jpg_decode
-        ESP_LOGI(TAG, "Converting JPEG to grayscale using decoder");
+        // JPEG to grayscale conversion using new esp_jpeg_decode API
+        ESP_LOGI(TAG, "Converting JPEG to grayscale using new decoder");
         
         // Allocate RGB buffer if not already done
         if (!rgb_decode_buffer) {
@@ -150,27 +113,44 @@ static void convert_to_mono8(camera_fb_t *src_fb, uint8_t *dst_buf, size_t *dst_
         // Clear RGB buffer
         memset(rgb_decode_buffer, 0, CAMERA_WIDTH * CAMERA_HEIGHT * 3);
         
-        // Set up JPEG decoder context
-        jpeg_read_ctx_t ctx = {
-            .data = src_fb->buf,
-            .len = src_fb->len,
-            .pos = 0
+        // Set up JPEG decoder configuration
+        esp_jpeg_image_cfg_t jpeg_cfg = {
+            .indata = src_fb->buf,
+            .indata_size = src_fb->len,
+            .outbuf = rgb_decode_buffer,
+            .outbuf_size = CAMERA_WIDTH * CAMERA_HEIGHT * 3,
+            .out_format = JPEG_IMAGE_FORMAT_RGB888,
+            .out_scale = JPEG_IMAGE_SCALE_0,
+            .flags = {0},
+            .advanced = {
+                .working_buffer = NULL,
+                .working_buffer_size = 0
+            }
         };
         
+        esp_jpeg_image_output_t img_info;
+        
         // Decode JPEG to RGB
-        esp_err_t ret = esp_jpg_decode(src_fb->len, JPG_SCALE_NONE, jpeg_reader_cb, jpeg_writer_cb, &ctx);
+        esp_err_t ret = esp_jpeg_decode(&jpeg_cfg, &img_info);
         if (ret == ESP_OK) {
-            // Convert RGB to grayscale
-            for (int i = 0; i < CAMERA_WIDTH * CAMERA_HEIGHT; i++) {
+            ESP_LOGI(TAG, "JPEG decoded successfully: %dx%d", img_info.width, img_info.height);
+            
+            // Convert RGB to grayscale using the actual decoded size
+            size_t pixels = img_info.width * img_info.height;
+            if (pixels > CAMERA_WIDTH * CAMERA_HEIGHT) {
+                pixels = CAMERA_WIDTH * CAMERA_HEIGHT;
+            }
+            
+            for (size_t i = 0; i < pixels; i++) {
                 uint8_t r = rgb_decode_buffer[i * 3];
                 uint8_t g = rgb_decode_buffer[i * 3 + 1];
                 uint8_t b = rgb_decode_buffer[i * 3 + 2];
                 dst_buf[i] = (uint8_t)(0.299f * r + 0.587f * g + 0.114f * b);
             }
-            *dst_len = CAMERA_WIDTH * CAMERA_HEIGHT;
+            *dst_len = pixels;
             ESP_LOGI(TAG, "Successfully decoded JPEG to grayscale: %d pixels", *dst_len);
         } else {
-            ESP_LOGW(TAG, "JPEG decode failed, using fallback pattern");
+            ESP_LOGW(TAG, "JPEG decode failed (ret=%d), using fallback pattern", ret);
             // Fallback to pattern based on JPEG data
             uint32_t checksum = 0;
             for (size_t i = 0; i < src_fb->len && i < 1024; i++) {
@@ -231,17 +211,11 @@ esp_err_t camera_init(void)
 {
     ESP_LOGI(TAG, "Initializing ESP32-CAM...");
     
-    // Initialize LEDC peripheral first to prevent LEDC timer errors
-    ESP_LOGI(TAG, "Initializing LEDC for camera XCLK...");
-    ledc_timer_config_t ledc_timer = {
-        .duty_resolution = LEDC_TIMER_1_BIT,
-        .freq_hz = 20000000,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .timer_num = LEDC_TIMER_0
-    };
-    esp_err_t ledc_err = ledc_timer_config(&ledc_timer);
+    // Initialize LEDC peripheral for camera XCLK generation
+    ESP_LOGI(TAG, "Initializing LEDC peripheral...");
+    esp_err_t ledc_err = ledc_fade_func_install(0);
     if (ledc_err != ESP_OK) {
-        ESP_LOGE(TAG, "LEDC timer config failed: %s", esp_err_to_name(ledc_err));
+        ESP_LOGE(TAG, "LEDC fade func install failed: %s", esp_err_to_name(ledc_err));
         return ledc_err;
     }
     
