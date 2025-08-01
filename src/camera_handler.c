@@ -2,6 +2,9 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_camera.h"
+#include "esp_jpg_decode.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,8 +13,76 @@ static const char *TAG = "camera_handler";
 // Camera mode flag
 static bool use_real_camera = false;
 
-// Frame conversion buffer for format conversion
+// Current pixel format (default to Mono8)
+int current_camera_pixformat = CAMERA_PIXFORMAT_MONO8;
+
+// JPEG quality (0-63, lower is higher quality, default 12)
+static int jpeg_quality = 12;
+
+// Camera control parameters with defaults
+static uint32_t exposure_time_us = 10000;  // 10ms default
+static int gain_value = 0;                 // 0 dB default  
+static int brightness_value = 0;           // 0 default (-2 to +2)
+static int contrast_value = 0;             // 0 default (-2 to +2)
+static int saturation_value = 0;           // 0 default (-2 to +2)
+static int white_balance_mode = WB_MODE_AUTO; // Auto white balance default
+static int trigger_mode = TRIGGER_MODE_OFF;   // Free running default
+
+// Frame conversion buffer for format conversion (Mono8)
 static uint8_t conversion_buffer[CAMERA_WIDTH * CAMERA_HEIGHT];
+
+// JPEG frame buffer for direct JPEG streaming (larger to accommodate compression)
+static uint8_t jpeg_buffer[32768]; // 32KB buffer for JPEG frames
+
+// RGB565 buffer (2 bytes per pixel)
+static uint8_t rgb565_buffer[CAMERA_WIDTH * CAMERA_HEIGHT * 2];
+
+// YUV422 buffer (2 bytes per pixel)
+static uint8_t yuv422_buffer[CAMERA_WIDTH * CAMERA_HEIGHT * 2];
+
+// RGB888 buffer (3 bytes per pixel)
+static uint8_t rgb888_buffer[CAMERA_WIDTH * CAMERA_HEIGHT * 3];
+
+// RGB buffer for JPEG decoding (3 bytes per pixel)
+static uint8_t *rgb_decode_buffer = NULL;
+
+// JPEG decoder state
+typedef struct {
+    const uint8_t *data;
+    size_t len;
+    size_t pos;
+} jpeg_read_ctx_t;
+
+// JPEG reader callback for esp_jpg_decode
+static size_t jpeg_reader_cb(void *arg, size_t index, uint8_t *buf, size_t len) {
+    jpeg_read_ctx_t *ctx = (jpeg_read_ctx_t *)arg;
+    if (index + len > ctx->len) {
+        len = ctx->len - index;
+    }
+    if (len > 0) {
+        memcpy(buf, ctx->data + index, len);
+    }
+    return len;
+}
+
+// JPEG writer callback for esp_jpg_decode
+static bool jpeg_writer_cb(void *arg, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t *data) {
+    // Write RGB data to our decode buffer
+    if (rgb_decode_buffer && x + w <= CAMERA_WIDTH && y + h <= CAMERA_HEIGHT) {
+        for (uint16_t row = 0; row < h; row++) {
+            for (uint16_t col = 0; col < w; col++) {
+                size_t rgb_idx = ((y + row) * CAMERA_WIDTH + (x + col)) * 3;
+                size_t src_idx = (row * w + col) * 3;
+                if (rgb_idx + 2 < CAMERA_WIDTH * CAMERA_HEIGHT * 3) {
+                    rgb_decode_buffer[rgb_idx] = data[src_idx];       // R
+                    rgb_decode_buffer[rgb_idx + 1] = data[src_idx + 1]; // G
+                    rgb_decode_buffer[rgb_idx + 2] = data[src_idx + 2]; // B
+                }
+            }
+        }
+    }
+    return true;
+}
 
 // Convert various camera formats to Mono8 grayscale
 // Supported formats: PIXFORMAT_GRAYSCALE, PIXFORMAT_RGB565, PIXFORMAT_YUV422, 
@@ -62,19 +133,48 @@ static void convert_to_mono8(camera_fb_t *src_fb, uint8_t *dst_buf, size_t *dst_
         *dst_len = pixel_count;
         ESP_LOGI(TAG, "Converted YUV422 to grayscale: %d pixels", pixel_count);
     } else if (src_fb->format == PIXFORMAT_JPEG) {
-        // JPEG to grayscale conversion
-        // For JPEG, we need to decode it first. Since ESP32 doesn't have built-in JPEG decoder,
-        // we'll implement a simple approach or fall back to a pattern
-        ESP_LOGW(TAG, "JPEG format detected, but no decoder available");
-        ESP_LOGI(TAG, "Converting JPEG to grayscale using simplified approach");
+        // JPEG to grayscale conversion using esp_jpg_decode
+        ESP_LOGI(TAG, "Converting JPEG to grayscale using decoder");
         
-        // Simple approach: use JPEG data as-is if small enough, or create pattern
-        if (src_fb->len <= (CAMERA_WIDTH * CAMERA_HEIGHT)) {
-            // Use raw JPEG bytes as grayscale (not ideal but functional)
-            memcpy(dst_buf, src_fb->buf, src_fb->len);
-            *dst_len = src_fb->len;
+        // Allocate RGB buffer if not already done
+        if (!rgb_decode_buffer) {
+            rgb_decode_buffer = malloc(CAMERA_WIDTH * CAMERA_HEIGHT * 3);
+            if (!rgb_decode_buffer) {
+                ESP_LOGE(TAG, "Failed to allocate RGB decode buffer");
+                // Fallback to pattern
+                for (int i = 0; i < CAMERA_WIDTH * CAMERA_HEIGHT; i++) {
+                    dst_buf[i] = i % 256;
+                }
+                *dst_len = CAMERA_WIDTH * CAMERA_HEIGHT;
+                return;
+            }
+        }
+        
+        // Clear RGB buffer
+        memset(rgb_decode_buffer, 0, CAMERA_WIDTH * CAMERA_HEIGHT * 3);
+        
+        // Set up JPEG decoder context
+        jpeg_read_ctx_t ctx = {
+            .data = src_fb->buf,
+            .len = src_fb->len,
+            .pos = 0
+        };
+        
+        // Decode JPEG to RGB
+        esp_err_t ret = esp_jpg_decode(src_fb->len, JPG_SCALE_NONE, jpeg_reader_cb, jpeg_writer_cb, &ctx);
+        if (ret == ESP_OK) {
+            // Convert RGB to grayscale
+            for (int i = 0; i < CAMERA_WIDTH * CAMERA_HEIGHT; i++) {
+                uint8_t r = rgb_decode_buffer[i * 3];
+                uint8_t g = rgb_decode_buffer[i * 3 + 1];
+                uint8_t b = rgb_decode_buffer[i * 3 + 2];
+                dst_buf[i] = (uint8_t)(0.299f * r + 0.587f * g + 0.114f * b);
+            }
+            *dst_len = CAMERA_WIDTH * CAMERA_HEIGHT;
+            ESP_LOGI(TAG, "Successfully decoded JPEG to grayscale: %d pixels", *dst_len);
         } else {
-            // Create a pattern based on JPEG data checksum
+            ESP_LOGW(TAG, "JPEG decode failed, using fallback pattern");
+            // Fallback to pattern based on JPEG data
             uint32_t checksum = 0;
             for (size_t i = 0; i < src_fb->len && i < 1024; i++) {
                 checksum += src_fb->buf[i];
@@ -85,7 +185,6 @@ static void convert_to_mono8(camera_fb_t *src_fb, uint8_t *dst_buf, size_t *dst_
             }
             *dst_len = CAMERA_WIDTH * CAMERA_HEIGHT;
         }
-        ESP_LOGI(TAG, "Converted JPEG to grayscale pattern: %d bytes", *dst_len);
     } else if (src_fb->format == PIXFORMAT_RGB888) {
         // RGB888 to grayscale conversion
         uint8_t *rgb888 = src_fb->buf;
@@ -163,7 +262,7 @@ esp_err_t camera_init(void)
         .pixel_format = PIXFORMAT_GRAYSCALE, // Prefer grayscale for best performance
         .frame_size = FRAMESIZE_QVGA,        // 320x240 resolution
         
-        .jpeg_quality = 12,  // 0-63 lower number means higher quality
+        .jpeg_quality = jpeg_quality,  // Use current JPEG quality setting
         .fb_count = 1        // if more than one, will work in JPEG mode only
     };
     
@@ -179,6 +278,12 @@ esp_err_t camera_init(void)
     use_real_camera = true;
     ESP_LOGI(TAG, "ESP32-CAM initialized successfully: %dx%d, format=GRAYSCALE", 
              CAMERA_WIDTH, CAMERA_HEIGHT);
+    
+    // Load settings from NVS
+    esp_err_t nvs_err = camera_settings_load_from_nvs();
+    if (nvs_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to load settings from NVS, using defaults");
+    }
     
     return ESP_OK;
 }
@@ -234,7 +339,7 @@ bool camera_is_real_camera_active(void)
     return use_real_camera;
 }
 
-esp_err_t camera_capture_frame(camera_fb_t **fb)
+esp_err_t camera_capture_frame(local_camera_fb_t **fb)
 {
     static dummy_camera_fb_t converted_fb;
     
@@ -246,6 +351,79 @@ esp_err_t camera_capture_frame(camera_fb_t **fb)
             use_real_camera = false; // Fall back to dummy mode on error
             ESP_LOGW(TAG, "Switching to dummy mode due to capture failure");
         } else {
+            // Handle direct format streaming when possible
+            if (current_camera_pixformat == CAMERA_PIXFORMAT_JPEG && frame_buffer->format == PIXFORMAT_JPEG) {
+                // Stream JPEG directly without conversion
+                size_t copy_len = (frame_buffer->len < sizeof(jpeg_buffer)) ? 
+                                frame_buffer->len : sizeof(jpeg_buffer);
+                memcpy(jpeg_buffer, frame_buffer->buf, copy_len);
+                
+                // Return the frame buffer to the driver
+                esp_camera_fb_return(frame_buffer);
+                
+                // Set up JPEG frame buffer
+                converted_fb.buf = jpeg_buffer;
+                converted_fb.len = copy_len;
+                converted_fb.width = CAMERA_WIDTH;
+                converted_fb.height = CAMERA_HEIGHT;
+                converted_fb.format = CAMERA_PIXFORMAT_JPEG;
+                
+                *fb = (local_camera_fb_t*)&converted_fb;
+                ESP_LOGI(TAG, "Frame captured JPEG (real): %d bytes", copy_len);
+                return ESP_OK;
+            } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB565 && frame_buffer->format == PIXFORMAT_RGB565) {
+                // Stream RGB565 directly
+                size_t copy_len = (frame_buffer->len < sizeof(rgb565_buffer)) ? 
+                                frame_buffer->len : sizeof(rgb565_buffer);
+                memcpy(rgb565_buffer, frame_buffer->buf, copy_len);
+                
+                esp_camera_fb_return(frame_buffer);
+                
+                converted_fb.buf = rgb565_buffer;
+                converted_fb.len = copy_len;
+                converted_fb.width = CAMERA_WIDTH;
+                converted_fb.height = CAMERA_HEIGHT;
+                converted_fb.format = CAMERA_PIXFORMAT_RGB565;
+                
+                *fb = (local_camera_fb_t*)&converted_fb;
+                ESP_LOGI(TAG, "Frame captured RGB565 (real): %d bytes", copy_len);
+                return ESP_OK;
+            } else if (current_camera_pixformat == CAMERA_PIXFORMAT_YUV422 && frame_buffer->format == PIXFORMAT_YUV422) {
+                // Stream YUV422 directly
+                size_t copy_len = (frame_buffer->len < sizeof(yuv422_buffer)) ? 
+                                frame_buffer->len : sizeof(yuv422_buffer);
+                memcpy(yuv422_buffer, frame_buffer->buf, copy_len);
+                
+                esp_camera_fb_return(frame_buffer);
+                
+                converted_fb.buf = yuv422_buffer;
+                converted_fb.len = copy_len;
+                converted_fb.width = CAMERA_WIDTH;
+                converted_fb.height = CAMERA_HEIGHT;
+                converted_fb.format = CAMERA_PIXFORMAT_YUV422;
+                
+                *fb = (local_camera_fb_t*)&converted_fb;
+                ESP_LOGI(TAG, "Frame captured YUV422 (real): %d bytes", copy_len);
+                return ESP_OK;
+            } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB888 && frame_buffer->format == PIXFORMAT_RGB888) {
+                // Stream RGB888 directly
+                size_t copy_len = (frame_buffer->len < sizeof(rgb888_buffer)) ? 
+                                frame_buffer->len : sizeof(rgb888_buffer);
+                memcpy(rgb888_buffer, frame_buffer->buf, copy_len);
+                
+                esp_camera_fb_return(frame_buffer);
+                
+                converted_fb.buf = rgb888_buffer;
+                converted_fb.len = copy_len;
+                converted_fb.width = CAMERA_WIDTH;
+                converted_fb.height = CAMERA_HEIGHT;
+                converted_fb.format = CAMERA_PIXFORMAT_RGB888;
+                
+                *fb = (local_camera_fb_t*)&converted_fb;
+                ESP_LOGI(TAG, "Frame captured RGB888 (real): %d bytes", copy_len);
+                return ESP_OK;
+            }
+            
             // Convert to Mono8 format for GenICam compatibility
             size_t converted_len;
             convert_to_mono8(frame_buffer, conversion_buffer, &converted_len);
@@ -258,7 +436,7 @@ esp_err_t camera_capture_frame(camera_fb_t **fb)
             converted_fb.len = converted_len;
             converted_fb.width = CAMERA_WIDTH;
             converted_fb.height = CAMERA_HEIGHT;
-            converted_fb.format = CAMERA_PIXFORMAT; // Mono8
+            converted_fb.format = CAMERA_PIXFORMAT_MONO8;
             
             *fb = (camera_fb_t*)&converted_fb;
             ESP_LOGI(TAG, "Frame captured and converted (real): %d bytes", converted_len);
@@ -283,18 +461,518 @@ esp_err_t camera_capture_frame(camera_fb_t **fb)
     dummy_fb.len = sizeof(dummy_frame);
     dummy_fb.width = CAMERA_WIDTH;
     dummy_fb.height = CAMERA_HEIGHT;
-    dummy_fb.format = CAMERA_PIXFORMAT;
+    dummy_fb.format = current_camera_pixformat; // Use current format
     
-    *fb = (camera_fb_t*)&dummy_fb;
+    *fb = (local_camera_fb_t*)&dummy_fb;
     
     ESP_LOGI(TAG, "Frame captured (dummy): %d bytes", dummy_fb.len);
     return ESP_OK;
 }
 
-void camera_return_frame(camera_fb_t *fb)
+void camera_return_frame(local_camera_fb_t *fb)
 {
     // Frame buffers are now handled within camera_capture_frame()
     // Real camera frames: returned to driver immediately after conversion
     // Dummy/converted frames: use static buffers, no cleanup needed
     (void)fb;
+}
+
+esp_err_t camera_set_genicam_pixformat(int genicam_format)
+{
+    if (genicam_format == 0x01080001) { // Mono8
+        current_camera_pixformat = CAMERA_PIXFORMAT_MONO8;
+        if (use_real_camera) {
+            // Set camera to grayscale mode
+            esp_err_t ret = camera_set_pixel_format(PIXFORMAT_GRAYSCALE);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set camera to grayscale mode");
+                return ret;
+            }
+        }
+        ESP_LOGI(TAG, "Pixel format set to Mono8");
+        return ESP_OK;
+    } else if (genicam_format == 0x02100005) { // RGB565Packed
+        current_camera_pixformat = CAMERA_PIXFORMAT_RGB565;
+        if (use_real_camera) {
+            // Set camera to RGB565 mode
+            esp_err_t ret = camera_set_pixel_format(PIXFORMAT_RGB565);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set camera to RGB565 mode");
+                return ret;
+            }
+        }
+        ESP_LOGI(TAG, "Pixel format set to RGB565");
+        return ESP_OK;
+    } else if (genicam_format == 0x02100004) { // YUV422Packed
+        current_camera_pixformat = CAMERA_PIXFORMAT_YUV422;
+        if (use_real_camera) {
+            // Set camera to YUV422 mode
+            esp_err_t ret = camera_set_pixel_format(PIXFORMAT_YUV422);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set camera to YUV422 mode");
+                return ret;
+            }
+        }
+        ESP_LOGI(TAG, "Pixel format set to YUV422");
+        return ESP_OK;
+    } else if (genicam_format == 0x02180014) { // RGB8Packed
+        current_camera_pixformat = CAMERA_PIXFORMAT_RGB888;
+        if (use_real_camera) {
+            // Set camera to RGB888 mode
+            esp_err_t ret = camera_set_pixel_format(PIXFORMAT_RGB888);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set camera to RGB888 mode");
+                return ret;
+            }
+        }
+        ESP_LOGI(TAG, "Pixel format set to RGB888");
+        return ESP_OK;
+    } else if (genicam_format == 0x80000001) { // JPEG
+        current_camera_pixformat = CAMERA_PIXFORMAT_JPEG;
+        if (use_real_camera) {
+            // Set camera to JPEG mode
+            esp_err_t ret = camera_set_pixel_format(PIXFORMAT_JPEG);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set camera to JPEG mode");
+                return ret;
+            }
+        }
+        ESP_LOGI(TAG, "Pixel format set to JPEG");
+        return ESP_OK;
+    }
+    
+    ESP_LOGE(TAG, "Unsupported GenICam pixel format: 0x%08X", genicam_format);
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+int camera_get_genicam_pixformat(void)
+{
+    if (current_camera_pixformat == CAMERA_PIXFORMAT_MONO8) {
+        return 0x01080001; // Mono8
+    } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB565) {
+        return 0x02100005; // RGB565Packed
+    } else if (current_camera_pixformat == CAMERA_PIXFORMAT_YUV422) {
+        return 0x02100004; // YUV422Packed
+    } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB888) {
+        return 0x02180014; // RGB8Packed
+    } else if (current_camera_pixformat == CAMERA_PIXFORMAT_JPEG) {
+        return 0x80000001; // JPEG
+    }
+    return 0x01080001; // Default to Mono8
+}
+
+size_t camera_get_max_payload_size(void)
+{
+    if (current_camera_pixformat == CAMERA_PIXFORMAT_JPEG) {
+        return sizeof(jpeg_buffer); // Variable size for JPEG
+    } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB565) {
+        return CAMERA_WIDTH * CAMERA_HEIGHT * 2; // 2 bytes per pixel for RGB565
+    } else if (current_camera_pixformat == CAMERA_PIXFORMAT_YUV422) {
+        return CAMERA_WIDTH * CAMERA_HEIGHT * 2; // 2 bytes per pixel for YUV422
+    } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB888) {
+        return CAMERA_WIDTH * CAMERA_HEIGHT * 3; // 3 bytes per pixel for RGB888
+    } else {
+        return CAMERA_WIDTH * CAMERA_HEIGHT; // Fixed size for Mono8
+    }
+}
+
+esp_err_t camera_set_jpeg_quality(int quality)
+{
+    if (quality < 0 || quality > 63) {
+        ESP_LOGE(TAG, "JPEG quality out of range: %d (0-63)", quality);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    jpeg_quality = quality;
+    
+    if (use_real_camera) {
+        // Set JPEG quality on camera sensor
+        sensor_t *s = esp_camera_sensor_get();
+        if (s != NULL) {
+            s->set_quality(s, quality);
+            ESP_LOGI(TAG, "JPEG quality set to %d on camera sensor", quality);
+        } else {
+            ESP_LOGW(TAG, "Could not get camera sensor to set JPEG quality");
+        }
+    }
+    
+    ESP_LOGI(TAG, "JPEG quality set to %d", quality);
+    return ESP_OK;
+}
+
+int camera_get_jpeg_quality(void)
+{
+    return jpeg_quality;
+}
+
+// Camera sensor control implementations
+esp_err_t camera_set_exposure_time(uint32_t exposure_us)
+{
+    if (exposure_us < 1 || exposure_us > 1000000) {
+        ESP_LOGE(TAG, "Exposure time out of range: %lu us (1-1000000)", exposure_us);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    exposure_time_us = exposure_us;
+    
+    if (use_real_camera) {
+        sensor_t *s = esp_camera_sensor_get();
+        if (s != NULL && s->set_aec_value != NULL) {
+            // Convert microseconds to sensor units (approximate)
+            int aec_value = exposure_time_us / 100; // Rough conversion
+            if (aec_value > 1200) aec_value = 1200;
+            s->set_aec_value(s, aec_value);
+            ESP_LOGI(TAG, "Exposure time set to %lu us (aec_value=%d)", exposure_us, aec_value);
+        } else {
+            ESP_LOGW(TAG, "Could not set exposure on camera sensor");
+        }
+    }
+    
+    ESP_LOGI(TAG, "Exposure time set to %lu us", exposure_us);
+    
+    // Auto-save to NVS
+    camera_settings_save_to_nvs();
+    
+    return ESP_OK;
+}
+
+uint32_t camera_get_exposure_time(void)
+{
+    return exposure_time_us;
+}
+
+esp_err_t camera_set_gain(int gain)
+{
+    if (gain < 0 || gain > 30) {
+        ESP_LOGE(TAG, "Gain out of range: %d (0-30 dB)", gain);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    gain_value = gain;
+    
+    if (use_real_camera) {
+        sensor_t *s = esp_camera_sensor_get();
+        if (s != NULL && s->set_agc_gain != NULL) {
+            s->set_agc_gain(s, gain);
+            ESP_LOGI(TAG, "Gain set to %d dB on camera sensor", gain);
+        } else {
+            ESP_LOGW(TAG, "Could not set gain on camera sensor");
+        }
+    }
+    
+    ESP_LOGI(TAG, "Gain set to %d dB", gain);
+    return ESP_OK;
+}
+
+int camera_get_gain(void)
+{
+    return gain_value;
+}
+
+esp_err_t camera_set_brightness(int brightness)
+{
+    if (brightness < -2 || brightness > 2) {
+        ESP_LOGE(TAG, "Brightness out of range: %d (-2 to +2)", brightness);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    brightness_value = brightness;
+    
+    if (use_real_camera) {
+        sensor_t *s = esp_camera_sensor_get();
+        if (s != NULL && s->set_brightness != NULL) {
+            s->set_brightness(s, brightness);
+            ESP_LOGI(TAG, "Brightness set to %d on camera sensor", brightness);
+        } else {
+            ESP_LOGW(TAG, "Could not set brightness on camera sensor");
+        }
+    }
+    
+    ESP_LOGI(TAG, "Brightness set to %d", brightness);
+    return ESP_OK;
+}
+
+int camera_get_brightness(void)
+{
+    return brightness_value;
+}
+
+esp_err_t camera_set_contrast(int contrast)
+{
+    if (contrast < -2 || contrast > 2) {
+        ESP_LOGE(TAG, "Contrast out of range: %d (-2 to +2)", contrast);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    contrast_value = contrast;
+    
+    if (use_real_camera) {
+        sensor_t *s = esp_camera_sensor_get();
+        if (s != NULL && s->set_contrast != NULL) {
+            s->set_contrast(s, contrast);
+            ESP_LOGI(TAG, "Contrast set to %d on camera sensor", contrast);
+        } else {
+            ESP_LOGW(TAG, "Could not set contrast on camera sensor");
+        }
+    }
+    
+    ESP_LOGI(TAG, "Contrast set to %d", contrast);
+    return ESP_OK;
+}
+
+int camera_get_contrast(void)
+{
+    return contrast_value;
+}
+
+esp_err_t camera_set_saturation(int saturation)
+{
+    if (saturation < -2 || saturation > 2) {
+        ESP_LOGE(TAG, "Saturation out of range: %d (-2 to +2)", saturation);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    saturation_value = saturation;
+    
+    if (use_real_camera) {
+        sensor_t *s = esp_camera_sensor_get();
+        if (s != NULL && s->set_saturation != NULL) {
+            s->set_saturation(s, saturation);
+            ESP_LOGI(TAG, "Saturation set to %d on camera sensor", saturation);
+        } else {
+            ESP_LOGW(TAG, "Could not set saturation on camera sensor");
+        }
+    }
+    
+    ESP_LOGI(TAG, "Saturation set to %d", saturation);
+    return ESP_OK;
+}
+
+int camera_get_saturation(void)
+{
+    return saturation_value;
+}
+
+esp_err_t camera_set_white_balance_mode(int mode)
+{
+    if (mode != WB_MODE_OFF && mode != WB_MODE_AUTO) {
+        ESP_LOGE(TAG, "Invalid white balance mode: %d", mode);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    white_balance_mode = mode;
+    
+    if (use_real_camera) {
+        sensor_t *s = esp_camera_sensor_get();
+        if (s != NULL && s->set_awb_gain != NULL) {
+            s->set_awb_gain(s, mode == WB_MODE_AUTO ? 1 : 0);
+            ESP_LOGI(TAG, "White balance mode set to %s on camera sensor", 
+                     mode == WB_MODE_AUTO ? "AUTO" : "OFF");
+        } else {
+            ESP_LOGW(TAG, "Could not set white balance on camera sensor");
+        }
+    }
+    
+    ESP_LOGI(TAG, "White balance mode set to %s", mode == WB_MODE_AUTO ? "AUTO" : "OFF");
+    return ESP_OK;
+}
+
+int camera_get_white_balance_mode(void)
+{
+    return white_balance_mode;
+}
+
+esp_err_t camera_set_trigger_mode(int mode)
+{
+    if (mode != TRIGGER_MODE_OFF && mode != TRIGGER_MODE_ON && mode != TRIGGER_MODE_SOFTWARE) {
+        ESP_LOGE(TAG, "Invalid trigger mode: %d", mode);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    trigger_mode = mode;
+    ESP_LOGI(TAG, "Trigger mode set to %s", 
+             mode == TRIGGER_MODE_OFF ? "OFF" :
+             mode == TRIGGER_MODE_ON ? "ON" : "SOFTWARE");
+    
+    return ESP_OK;
+}
+
+int camera_get_trigger_mode(void)
+{
+    return trigger_mode;
+}
+
+// NVS storage functions
+#define NVS_NAMESPACE "camera_settings"
+
+esp_err_t camera_settings_save_to_nvs(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+    
+    ESP_LOGI(TAG, "Saving camera settings to NVS");
+    
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error opening NVS handle: %s", esp_err_to_name(err));
+        return err;
+    }
+    
+    // Save all camera control parameters
+    err = nvs_set_u32(nvs_handle, "exposure_time", exposure_time_us);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "gain", gain_value);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "brightness", brightness_value);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "contrast", contrast_value);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "saturation", saturation_value);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "wb_mode", white_balance_mode);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "trigger_mode", trigger_mode);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "jpeg_quality", jpeg_quality);
+    if (err != ESP_OK) goto nvs_error;
+    
+    err = nvs_set_i32(nvs_handle, "pixel_format", current_camera_pixformat);
+    if (err != ESP_OK) goto nvs_error;
+    
+    // Commit the changes
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) goto nvs_error;
+    
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Camera settings saved to NVS successfully");
+    return ESP_OK;
+    
+nvs_error:
+    ESP_LOGE(TAG, "Error saving to NVS: %s", esp_err_to_name(err));
+    nvs_close(nvs_handle);
+    return err;
+}
+
+esp_err_t camera_settings_load_from_nvs(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+    size_t required_size;
+    
+    ESP_LOGI(TAG, "Loading camera settings from NVS");
+    
+    err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "NVS namespace not found, using defaults: %s", esp_err_to_name(err));
+        return ESP_OK; // Not an error, just use defaults
+    }
+    
+    // Load all camera control parameters
+    uint32_t temp_u32;
+    int32_t temp_i32;
+    
+    err = nvs_get_u32(nvs_handle, "exposure_time", &temp_u32);
+    if (err == ESP_OK && temp_u32 >= 1 && temp_u32 <= 1000000) {
+        exposure_time_us = temp_u32;
+        camera_set_exposure_time(exposure_time_us);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "gain", &temp_i32);
+    if (err == ESP_OK && temp_i32 >= 0 && temp_i32 <= 30) {
+        gain_value = temp_i32;
+        camera_set_gain(gain_value);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "brightness", &temp_i32);
+    if (err == ESP_OK && temp_i32 >= -2 && temp_i32 <= 2) {
+        brightness_value = temp_i32;
+        camera_set_brightness(brightness_value);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "contrast", &temp_i32);
+    if (err == ESP_OK && temp_i32 >= -2 && temp_i32 <= 2) {
+        contrast_value = temp_i32;
+        camera_set_contrast(contrast_value);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "saturation", &temp_i32);
+    if (err == ESP_OK && temp_i32 >= -2 && temp_i32 <= 2) {
+        saturation_value = temp_i32;
+        camera_set_saturation(saturation_value);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "wb_mode", &temp_i32);
+    if (err == ESP_OK && (temp_i32 == WB_MODE_OFF || temp_i32 == WB_MODE_AUTO)) {
+        white_balance_mode = temp_i32;
+        camera_set_white_balance_mode(white_balance_mode);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "trigger_mode", &temp_i32);
+    if (err == ESP_OK && temp_i32 >= TRIGGER_MODE_OFF && temp_i32 <= TRIGGER_MODE_SOFTWARE) {
+        trigger_mode = temp_i32;
+        camera_set_trigger_mode(trigger_mode);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "jpeg_quality", &temp_i32);
+    if (err == ESP_OK && temp_i32 >= 0 && temp_i32 <= 63) {
+        jpeg_quality = temp_i32;
+        camera_set_jpeg_quality(jpeg_quality);
+    }
+    
+    err = nvs_get_i32(nvs_handle, "pixel_format", &temp_i32);
+    if (err == ESP_OK && (temp_i32 == CAMERA_PIXFORMAT_MONO8 || 
+                          temp_i32 == CAMERA_PIXFORMAT_JPEG ||
+                          temp_i32 == CAMERA_PIXFORMAT_RGB565 ||
+                          temp_i32 == CAMERA_PIXFORMAT_YUV422 ||
+                          temp_i32 == CAMERA_PIXFORMAT_RGB888)) {
+        current_camera_pixformat = temp_i32;
+        // Note: pixel format changes require camera restart, so we just store the setting
+    }
+    
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Camera settings loaded from NVS successfully");
+    return ESP_OK;
+}
+
+esp_err_t camera_settings_reset_to_defaults(void)
+{
+    ESP_LOGI(TAG, "Resetting camera settings to defaults");
+    
+    // Reset all parameters to their default values
+    exposure_time_us = 10000;  // 10ms default
+    gain_value = 0;            // 0 dB default  
+    brightness_value = 0;      // 0 default
+    contrast_value = 0;        // 0 default
+    saturation_value = 0;      // 0 default
+    white_balance_mode = WB_MODE_AUTO; // Auto white balance default
+    trigger_mode = TRIGGER_MODE_OFF;   // Free running default
+    jpeg_quality = 12;         // Default JPEG quality
+    current_camera_pixformat = CAMERA_PIXFORMAT_MONO8; // Default to Mono8
+    
+    // Apply the settings to the camera
+    camera_set_exposure_time(exposure_time_us);
+    camera_set_gain(gain_value);
+    camera_set_brightness(brightness_value);
+    camera_set_contrast(contrast_value);
+    camera_set_saturation(saturation_value);
+    camera_set_white_balance_mode(white_balance_mode);
+    camera_set_trigger_mode(trigger_mode);
+    camera_set_jpeg_quality(jpeg_quality);
+    
+    // Save the defaults to NVS
+    esp_err_t err = camera_settings_save_to_nvs();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to save default settings to NVS: %s", esp_err_to_name(err));
+        return err;
+    }
+    
+    ESP_LOGI(TAG, "Camera settings reset to defaults and saved to NVS");
+    return ESP_OK;
 }

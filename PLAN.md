@@ -83,20 +83,25 @@ just capture-packets        # Network protocol debugging
 The core implementation is complete and functional. Potential extensions include:
 
 ### Stability & Reliability
-- [ ] **GVCP Error Handling** - Add NACK handling and graceful unknown command handling
-- [ ] **Frame Buffering** - Buffer last N frames for basic resend if Aravis requests it
-- [ ] **Heartbeat Monitoring** - Connection health checking and recovery
+- [x] **GVCP Error Handling** - Add NACK handling and graceful unknown command handling
+- [x] **Frame Buffering** - Buffer last N frames for basic resend if Aravis requests it
+- [x] **Heartbeat Monitoring** - Connection health checking and recovery
+- [x] **Enhanced Command Validation** - Comprehensive input validation for memory operations
+- [x] **Connection State Management** - Robust state validation and cleanup functions
+- [x] **Automatic Socket Recreation** - Network failure detection and recovery
+- [x] **Frame Sequence Tracking** - Detect lost, duplicate, and out-of-order frames
+- [x] **Enhanced Statistics** - 16 diagnostic registers for real-time monitoring
 
 ### Performance Optimizations  
-- [ ] **Precise Timestamps** - Use `esp_timer_get_time()` for GVSP leader/trailer timestamps
+- [x] **Precise Timestamps** - Use `esp_timer_get_time()` for GVSP leader/trailer timestamps
 - [ ] **Camera Performance** - DMA or double-buffering for capture to avoid blocking
 - [ ] **Packet Timing** - Optimized delay tuning for different network conditions
 - [ ] **Resolution Scaling** - Support for larger image formats beyond 320x240
 
 ### Advanced Features
-- [ ] **Camera Controls** - ExposureTime, Gain, TriggerMode, WhiteBalance
-- [ ] **Pixel Formats** - Additional formats (Bayer, RGB565, YUV422)
-- [ ] **Compression** - JPEG streaming support for higher throughput
+- [x] **Camera Controls** - ExposureTime, Gain, TriggerMode, WhiteBalance
+- [x] **Pixel Formats** - Additional formats (RGB565, YUV422, RGB888) + existing (Mono8, JPEG)
+- [x] **Compression** - JPEG streaming support for higher throughput
 
 ### Testing & Automation
 - [ ] **Integration Tests** - Scripted testing using `arv-tool` + `tshark` to confirm full handshake + frame delivery
@@ -104,9 +109,9 @@ The core implementation is complete and functional. Potential extensions include
 - [ ] **Performance Benchmarks** - Frame rate and latency measurement tools
 
 ### Interface & Usability
-- [ ] **Web Configuration** - Browser-based camera parameter adjustment
+- [x] **Web Configuration** - Browser-based camera parameter adjustment
 - [ ] **Serial Interface** - Runtime configuration via UART commands
-- [ ] **Status LEDs** - Visual indicators for connection and streaming status
+- [x] **Status LEDs** - Visual indicators for connection and streaming status
 
 ## Project Structure
 

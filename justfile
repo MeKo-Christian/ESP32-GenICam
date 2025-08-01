@@ -12,7 +12,26 @@ setup:
     @which pio > /dev/null || (echo "❌ PlatformIO not found. Install with: pip install platformio" && exit 1)
     @which xmllint > /dev/null || (echo "❌ xmllint not found. Install with: sudo apt install libxml2-utils" && exit 1)
     @which arv-test-0.8 > /dev/null || echo "⚠️  Aravis tools not found. Install with: sudo apt install aravis-tools"
+    @echo "Setting up WiFi configuration..."
+    @just _setup-wifi-config
     @echo "✅ Development environment ready"
+
+# Internal: Setup WiFi configuration from template
+_setup-wifi-config:
+    @echo "Checking WiFi configuration..."
+    @if [ ! -f .envrc ]; then \
+        echo "📝 WiFi configuration not found. Creating from template..."; \
+        if [ -f .envrc.example ]; then \
+            cp .envrc.example .envrc; \
+            echo "⚠️  Please edit .envrc with your WiFi credentials"; \
+            echo "   Then run: direnv allow"; \
+        else \
+            echo "❌ .envrc.example not found"; \
+            exit 1; \
+        fi; \
+    else \
+        echo "✅ WiFi configuration file exists"; \
+    fi
 
 # Validate GenICam XML against official schema
 validate:
@@ -23,11 +42,20 @@ validate:
 # Build the ESP32 project
 build:
     @echo "Building ESP32-CAM project..."
+    @just _validate-wifi-config
     @echo "Configuring build system..."
     @pio run --target configuredata 2>/dev/null || true
     @echo "Building with ninja..."
     @cd .pio/build/esp32cam && ninja ESP32GenICam.elf
     @echo "✅ Build completed: ESP32GenICam.elf"
+
+# Internal: Validate WiFi configuration before build operations
+_validate-wifi-config:
+    @if [ -z "${WIFI_SSID}" ] || [ -z "${WIFI_PASSWORD}" ]; then \
+        echo "⚠️  WiFi credentials not set in environment"; \
+        echo "   Please set WIFI_SSID and WIFI_PASSWORD environment variables"; \
+        echo "   Or use direnv with .envrc file (run 'just wifi-config' for help)"; \
+    fi
 
 # Clean build artifacts
 clean:
@@ -122,14 +150,31 @@ device-info port="/dev/ttyUSB0":
     @echo "======================================"
     @pio device list | grep {{port}} || echo "Device not found on {{port}}"
 
-# Update WiFi credentials in platformio.ini (interactive)
+# WiFi configuration management
 wifi-config:
-    @echo "Current WiFi configuration in platformio.ini:"
-    @grep -n "CONFIG_ESP\|WIFI" platformio.ini || echo "No WiFi config found"
+    @echo "ESP32-CAM WiFi Configuration"
+    @echo "============================"
     @echo ""
-    @echo "To update WiFi credentials, edit platformio.ini and uncomment/set:"
-    @echo "; -D CONFIG_ESP_WIFI_SSID=\"YourWiFiSSID\""
-    @echo "; -D CONFIG_ESP_WIFI_PASSWORD=\"YourWiFiPassword\""
+    @if [ -f .envrc ]; then \
+        echo "✅ WiFi configuration file exists: .envrc"; \
+        echo "Current settings:"; \
+        grep "WIFI_" .envrc || echo "No WIFI_ variables found"; \
+    else \
+        echo "❌ WiFi configuration file not found"; \
+        echo "Creating .envrc from template..."; \
+        cp .envrc.example .envrc; \
+        echo "✅ Created .envrc from template"; \
+    fi
+    @echo ""
+    @echo "Setup instructions:"
+    @echo "1. Edit .envrc with your WiFi credentials"
+    @echo "2. If using direnv: run 'direnv allow'"
+    @echo "3. If not using direnv: export WIFI_SSID and WIFI_PASSWORD manually"
+    @echo "4. Environment variables will be used during build"
+    @echo ""
+    @echo "Current environment variables:"
+    @echo "WIFI_SSID: ${WIFI_SSID:-<not set>}"
+    @echo "WIFI_PASSWORD: ${WIFI_PASSWORD:-<not set>}"
 
 # Generate documentation
 docs:

@@ -1,0 +1,14 @@
+# ESP32-CAM WiFi Configuration
+# Copy this file to .envrc and set your actual WiFi credentials
+# 
+# Setup instructions:
+# 1. Copy this file: cp .envrc.example .envrc
+# 2. Edit .envrc with your WiFi credentials
+# 3. Install direnv: https://direnv.net/docs/installation.html
+# 4. Allow direnv: direnv allow
+# 5. Run: just setup
+#
+# Note: .envrc is gitignored for security
+
+export WIFI_SSID="YourWiFiSSID"
+export WIFI_PASSWORD="YourWiFiPassword"

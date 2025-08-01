@@ -18,8 +18,12 @@
 // GVSP Status flags
 #define GVSP_STATUS_SUCCESS          0x0000
 
-// Pixel format codes
-#define GVSP_PIXEL_MONO8             0x01080001
+// Pixel format codes (GenICam PFNC standard values)
+#define GVSP_PIXEL_MONO8             0x01080001  // Mono8
+#define GVSP_PIXEL_RGB565            0x02100005  // RGB565Packed  
+#define GVSP_PIXEL_YUV422            0x02100004  // YUV422Packed
+#define GVSP_PIXEL_RGB888            0x02180014  // RGB8Packed
+#define GVSP_PIXEL_JPEG              0x80000001  // JPEG
 
 // GVSP packet header structure
 typedef struct __attribute__((packed)) {
@@ -66,3 +70,24 @@ uint32_t gvsp_get_total_packets_sent(void);
 uint32_t gvsp_get_total_packet_errors(void);
 uint32_t gvsp_get_total_frames_sent(void);
 uint32_t gvsp_get_total_frame_errors(void);
+
+// Recovery and connection health functions
+uint32_t gvsp_get_connection_failures(void);
+bool gvsp_is_in_recovery_mode(void);
+uint32_t gvsp_get_time_since_last_activity(void);
+esp_err_t gvsp_reset_connection_state(void);
+esp_err_t gvsp_validate_connection_state(void);
+esp_err_t gvsp_force_cleanup(void);
+
+// Frame ring buffer functions
+uint32_t gvsp_get_frames_stored_in_ring(void);
+esp_err_t gvsp_resend_frame(uint32_t block_id);
+
+// Frame sequence tracking functions
+uint32_t gvsp_get_out_of_order_frames(void);
+uint32_t gvsp_get_lost_frames(void);
+uint32_t gvsp_get_duplicate_frames(void);
+uint32_t gvsp_get_expected_frame_sequence(void);
+uint32_t gvsp_get_last_received_sequence(void);
+esp_err_t gvsp_set_sequence_tracking(bool enabled);
+bool gvsp_is_sequence_tracking_enabled(void);

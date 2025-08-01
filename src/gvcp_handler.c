@@ -1,6 +1,7 @@
 #include "gvcp_handler.h"
 #include "genicam_xml.h"
 #include "gvsp_handler.h"
+#include "camera_handler.h"
 #include "status_led.h"
 
 // Default GVSP packet size if not defined
@@ -21,6 +22,17 @@ static const char *TAG = "gvcp_handler";
 
 static int sock = -1;
 static uint8_t bootstrap_memory[GVBS_DISCOVERY_DATA_SIZE];
+
+// Error handling statistics
+static uint32_t total_commands_received = 0;
+static uint32_t total_errors_sent = 0;
+static uint32_t total_unknown_commands = 0;
+
+// Socket health monitoring
+static uint32_t gvcp_socket_error_count = 0;
+static uint32_t gvcp_max_socket_errors = 3;
+static uint32_t gvcp_last_socket_recreation = 0;
+static uint32_t gvcp_socket_recreation_interval_ms = 15000; // Min 15s between recreations
 
 // Device information constants
 #define DEVICE_MANUFACTURER "ESP32GenICam"
@@ -43,6 +55,13 @@ static uint32_t packet_delay_us = 1000; // Inter-packet delay in microseconds (d
 static uint32_t frame_rate_fps = 1; // Frame rate in FPS (default 1 FPS)
 static uint32_t packet_size = GVSP_DATA_PACKET_SIZE; // Data packet size (default 1400)
 static uint32_t stream_status = 0; // Stream status register
+
+// Connection status (bit field)
+// Bit 0: GVCP socket active
+// Bit 1: GVSP socket active  
+// Bit 2: Client connected
+// Bit 3: Streaming active
+static uint32_t connection_status = 0;
 
 static void init_bootstrap_memory(void)
 {
@@ -87,6 +106,39 @@ static void init_bootstrap_memory(void)
     strncpy((char*)&bootstrap_memory[GVBS_XML_URL_0_OFFSET], XML_URL, 512);
 }
 
+esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, struct sockaddr_in *client_addr)
+{
+    if (original_header == NULL || client_addr == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    uint8_t response[sizeof(gvcp_header_t) + 2];
+    gvcp_header_t *nack_header = (gvcp_header_t*)response;
+    
+    // Create NACK response header
+    nack_header->packet_type = GVCP_PACKET_TYPE_ERROR;
+    nack_header->packet_flags = 0;
+    nack_header->command = original_header->command; // Echo back original command
+    nack_header->size = htons(2); // Error code size
+    nack_header->id = original_header->id; // Echo back packet ID
+    
+    // Add error code
+    *(uint16_t*)&response[sizeof(gvcp_header_t)] = htons(error_code);
+    
+    // Send NACK response
+    esp_err_t err = gvcp_sendto(response, sizeof(response), client_addr);
+    
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error sending NACK response");
+        return ESP_FAIL;
+    } else {
+        total_errors_sent++;
+        ESP_LOGW(TAG, "Sent NACK response for command 0x%04x with error code 0x%04x", 
+                 ntohs(original_header->command), error_code);
+        return ESP_OK;
+    }
+}
+
 esp_err_t gvcp_init(void)
 {
     struct sockaddr_in dest_addr;
@@ -120,7 +172,109 @@ esp_err_t gvcp_init(void)
     }
     ESP_LOGI(TAG, "Socket bound to port %d", GVCP_PORT);
 
+    // Set GVCP socket active bit
+    connection_status |= 0x01;
+
     return ESP_OK;
+}
+
+// GVCP socket recreation for network failure recovery
+static esp_err_t gvcp_recreate_socket(void)
+{
+    uint32_t current_time = esp_log_timestamp();
+    
+    // Rate limiting: don't recreate socket too frequently
+    if (current_time - gvcp_last_socket_recreation < gvcp_socket_recreation_interval_ms) {
+        ESP_LOGW(TAG, "GVCP socket recreation rate limited, skipping");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    ESP_LOGW(TAG, "Recreating GVCP socket due to network errors");
+    
+    // Close existing socket
+    if (sock >= 0) {
+        close(sock);
+        sock = -1;
+        connection_status &= ~0x01; // Clear GVCP socket active bit
+    }
+    
+    // Recreate socket
+    struct sockaddr_in dest_addr;
+    dest_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(GVCP_PORT);
+
+    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Unable to recreate GVCP socket: errno %d", errno);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "GVCP socket recreated");
+
+    int broadcast = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
+        ESP_LOGE(TAG, "Failed to set socket broadcast option after recreation");
+        close(sock);
+        sock = -1;
+        return ESP_FAIL;
+    }
+
+    int err = bind(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+    if (err < 0) {
+        ESP_LOGE(TAG, "GVCP socket unable to bind after recreation: errno %d", errno);
+        close(sock);
+        sock = -1;
+        return ESP_FAIL;
+    }
+    
+    // Initialize bootstrap memory again
+    init_bootstrap_memory();
+    
+    // Reset socket error count and update status
+    gvcp_socket_error_count = 0;
+    gvcp_last_socket_recreation = current_time;
+    connection_status |= 0x01; // Set GVCP socket active bit
+    
+    ESP_LOGI(TAG, "GVCP socket successfully recreated and bound to port %d", GVCP_PORT);
+    return ESP_OK;
+}
+
+// Helper function for GVCP sendto with error handling
+static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr)
+{
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Invalid GVCP socket for transmission");
+        gvcp_socket_error_count++;
+        return ESP_FAIL;
+    }
+    
+    int err = sendto(sock, data, data_len, 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
+    if (err < 0) {
+        gvcp_socket_error_count++;
+        ESP_LOGW(TAG, "GVCP sendto failed: errno %d (%s)", errno, strerror(errno));
+        
+        // Check for specific network errors that indicate socket issues
+        if (errno == EBADF || errno == ENOTSOCK || errno == ENETDOWN || errno == ENETUNREACH) {
+            if (gvcp_socket_error_count >= gvcp_max_socket_errors) {
+                ESP_LOGW(TAG, "Max GVCP socket errors reached, attempting socket recreation");
+                esp_err_t recreate_result = gvcp_recreate_socket();
+                if (recreate_result == ESP_OK) {
+                    // Retry once with new socket
+                    err = sendto(sock, data, data_len, 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
+                    if (err >= 0) {
+                        return ESP_OK;
+                    }
+                }
+            }
+        }
+        return ESP_FAIL;
+    } else {
+        // Reset socket error count on successful send
+        if (gvcp_socket_error_count > 0) {
+            gvcp_socket_error_count = 0;
+        }
+        return ESP_OK;
+    }
 }
 
 static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in *client_addr)
@@ -141,22 +295,33 @@ static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in
     memcpy(&response[sizeof(gvcp_header_t)], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
     
     // Send response
-    int err = sendto(sock, response, sizeof(response), 0,
-                    (struct sockaddr *)client_addr, sizeof(*client_addr));
-    if (err < 0) {
-        ESP_LOGE(TAG, "Error sending discovery ACK: errno %d", errno);
+    esp_err_t err = gvcp_sendto(response, sizeof(response), client_addr);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error sending discovery ACK");
     } else {
         ESP_LOGI(TAG, "Sent discovery ACK (%d bytes)", sizeof(response));
         
         // Set GVSP client address for streaming
         gvsp_set_client_address(client_addr);
+        
+        // Set client connected bit
+        connection_status |= 0x04;
     }
 }
 
 static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr)
 {
-    if (ntohs(header->size) < 8) {
-        ESP_LOGE(TAG, "Invalid read memory command size");
+    // Enhanced validation
+    uint16_t packet_size = ntohs(header->size);
+    if (packet_size < 8) {
+        ESP_LOGE(TAG, "Invalid read memory command size: %d", packet_size);
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+        return;
+    }
+    
+    if (data == NULL) {
+        ESP_LOGE(TAG, "NULL data pointer in read memory command");
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
         return;
     }
     
@@ -165,9 +330,25 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
     
     ESP_LOGI(TAG, "Read memory: addr=0x%08x, size=%d", address, size);
     
-    // Limit read size for safety
+    // Enhanced size validation
+    if (size == 0) {
+        ESP_LOGW(TAG, "Read memory command with zero size");
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+        return;
+    }
+    
     if (size > 512) {
+        ESP_LOGW(TAG, "Read size %d exceeds maximum, clamping to 512", size);
         size = 512;
+    }
+    
+    // Address alignment check for certain registers (4-byte aligned for 32-bit registers)
+    bool is_register_access = (address >= GENICAM_ACQUISITION_START_OFFSET && 
+                              address <= GENICAM_TRIGGER_MODE_OFFSET);
+    if (is_register_access && (address % 4 != 0)) {
+        ESP_LOGW(TAG, "Unaligned register access at 0x%08x", address);
+        gvcp_send_nack(header, GVCP_ERROR_BAD_ALIGNMENT, client_addr);
+        return;
     }
     
     // Create read memory ACK response
@@ -227,6 +408,13 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         if (size > 4) {
             memset(data_ptr + 4, 0, size - 4);
         }
+    } else if (address == GENICAM_PIXEL_FORMAT_OFFSET && size >= 4) {
+        // Pixel format register
+        uint32_t reg_value = htonl(camera_get_genicam_pixformat());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
     } else if (address == GENICAM_PACKET_DELAY_OFFSET && size >= 4) {
         // Packet delay register (microseconds)
         uint32_t reg_value = htonl(packet_delay_us);
@@ -255,19 +443,193 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         if (size > 4) {
             memset(data_ptr + 4, 0, size - 4);
         }
+    } else if (address == GENICAM_PAYLOAD_SIZE_OFFSET && size >= 4) {
+        // Payload size register (dynamic based on pixel format)
+        uint32_t reg_value = htonl(camera_get_max_payload_size());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_JPEG_QUALITY_OFFSET && size >= 4) {
+        // JPEG quality register
+        uint32_t reg_value = htonl(camera_get_jpeg_quality());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_EXPOSURE_TIME_OFFSET && size >= 4) {
+        // Exposure time register (microseconds)
+        uint32_t reg_value = htonl(camera_get_exposure_time());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_GAIN_OFFSET && size >= 4) {
+        // Gain register (dB)
+        uint32_t reg_value = htonl((uint32_t)camera_get_gain());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_BRIGHTNESS_OFFSET && size >= 4) {
+        // Brightness register (-2 to +2)
+        uint32_t reg_value = htonl((uint32_t)camera_get_brightness());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_CONTRAST_OFFSET && size >= 4) {
+        // Contrast register (-2 to +2)
+        uint32_t reg_value = htonl((uint32_t)camera_get_contrast());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_SATURATION_OFFSET && size >= 4) {
+        // Saturation register (-2 to +2)
+        uint32_t reg_value = htonl((uint32_t)camera_get_saturation());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_WHITE_BALANCE_MODE_OFFSET && size >= 4) {
+        // White balance mode register
+        uint32_t reg_value = htonl((uint32_t)camera_get_white_balance_mode());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_TRIGGER_MODE_OFFSET && size >= 4) {
+        // Trigger mode register
+        uint32_t reg_value = htonl((uint32_t)camera_get_trigger_mode());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_TOTAL_COMMANDS_OFFSET && size >= 4) {
+        // Total commands received register
+        uint32_t reg_value = htonl(total_commands_received);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_TOTAL_ERRORS_OFFSET && size >= 4) {
+        // Total errors sent register
+        uint32_t reg_value = htonl(total_errors_sent);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_UNKNOWN_COMMANDS_OFFSET && size >= 4) {
+        // Unknown commands register
+        uint32_t reg_value = htonl(total_unknown_commands);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_PACKETS_SENT_OFFSET && size >= 4) {
+        // Total packets sent register (from GVSP)
+        uint32_t reg_value = htonl(gvsp_get_total_packets_sent());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_PACKET_ERRORS_OFFSET && size >= 4) {
+        // Packet errors register (from GVSP)
+        uint32_t reg_value = htonl(gvsp_get_total_packet_errors());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_FRAMES_SENT_OFFSET && size >= 4) {
+        // Total frames sent register (from GVSP)
+        uint32_t reg_value = htonl(gvsp_get_total_frames_sent());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_FRAME_ERRORS_OFFSET && size >= 4) {
+        // Frame errors register (from GVSP)
+        uint32_t reg_value = htonl(gvsp_get_total_frame_errors());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_CONNECTION_STATUS_OFFSET && size >= 4) {
+        // Connection status register
+        uint32_t reg_value = htonl(connection_status);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_OUT_OF_ORDER_FRAMES_OFFSET && size >= 4) {
+        // Out-of-order frames register
+        uint32_t reg_value = htonl(gvsp_get_out_of_order_frames());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_LOST_FRAMES_OFFSET && size >= 4) {
+        // Lost frames register
+        uint32_t reg_value = htonl(gvsp_get_lost_frames());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_DUPLICATE_FRAMES_OFFSET && size >= 4) {
+        // Duplicate frames register
+        uint32_t reg_value = htonl(gvsp_get_duplicate_frames());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_EXPECTED_SEQUENCE_OFFSET && size >= 4) {
+        // Expected sequence register
+        uint32_t reg_value = htonl(gvsp_get_expected_frame_sequence());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_LAST_SEQUENCE_OFFSET && size >= 4) {
+        // Last received sequence register
+        uint32_t reg_value = htonl(gvsp_get_last_received_sequence());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_FRAMES_IN_RING_OFFSET && size >= 4) {
+        // Frames in ring buffer register
+        uint32_t reg_value = htonl(gvsp_get_frames_stored_in_ring());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_CONNECTION_FAILURES_OFFSET && size >= 4) {
+        // Connection failures register
+        uint32_t reg_value = htonl(gvsp_get_connection_failures());
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_RECOVERY_MODE_OFFSET && size >= 4) {
+        // Recovery mode register (0 = false, 1 = true)
+        uint32_t reg_value = htonl(gvsp_is_in_recovery_mode() ? 1 : 0);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
     } else {
         // Unknown memory region - return zeros
         memset(data_ptr, 0, size);
     }
     
     // Send response
-    int err = sendto(sock, response, sizeof(gvcp_header_t) + 4 + size, 0,
-                    (struct sockaddr *)client_addr, sizeof(*client_addr));
+    esp_err_t err = gvcp_sendto(response, sizeof(gvcp_header_t) + 4 + size, client_addr);
     
     // Update client activity
     gvsp_update_client_activity();
-    if (err < 0) {
-        ESP_LOGE(TAG, "Error sending read memory ACK: errno %d", errno);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error sending read memory ACK");
     } else {
         ESP_LOGI(TAG, "Sent read memory ACK (%d bytes)", sizeof(gvcp_header_t) + 4 + size);
     }
@@ -275,16 +637,47 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
 
 static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr)
 {
-    if (ntohs(header->size) < 4) {
-        ESP_LOGE(TAG, "Invalid write memory command size");
+    // Enhanced validation
+    uint16_t packet_size = ntohs(header->size);
+    if (packet_size < 4) {
+        ESP_LOGE(TAG, "Invalid write memory command size: %d", packet_size);
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+        return;
+    }
+    
+    if (data == NULL) {
+        ESP_LOGE(TAG, "NULL data pointer in write memory command");
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
         return;
     }
     
     uint32_t address = ntohl(*(uint32_t*)data);
-    uint32_t size = ntohs(header->size) - 4;
+    uint32_t size = packet_size - 4;
     const uint8_t *write_data = data + 4;
     
     ESP_LOGI(TAG, "Write memory: addr=0x%08x, size=%d", address, size);
+    
+    // Enhanced write validation
+    if (size == 0) {
+        ESP_LOGW(TAG, "Write memory command with zero size");
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+        return;
+    }
+    
+    if (size > 512) {
+        ESP_LOGW(TAG, "Write size %d exceeds maximum", size);
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+        return;
+    }
+    
+    // Address alignment check for register access
+    bool is_register_access = (address >= GENICAM_ACQUISITION_START_OFFSET && 
+                              address <= GENICAM_JPEG_QUALITY_OFFSET);
+    if (is_register_access && (address % 4 != 0)) {
+        ESP_LOGW(TAG, "Unaligned register write at 0x%08x", address);
+        gvcp_send_nack(header, GVCP_ERROR_BAD_ALIGNMENT, client_addr);
+        return;
+    }
     
     // Handle different write regions
     bool write_successful = false;
@@ -303,6 +696,8 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             status_led_set_state(LED_STATE_FAST_BLINK);
             gvsp_start_streaming();
             acquisition_start_reg = 1;
+            // Set streaming active bit
+            connection_status |= 0x08;
         }
         write_successful = true;
     } else if (address == GENICAM_ACQUISITION_STOP_OFFSET && size >= 4) {
@@ -314,6 +709,8 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             gvsp_stop_streaming();
             gvsp_clear_client_address();
             acquisition_stop_reg = 1;
+            // Clear streaming active bit and client connected bit
+            connection_status &= ~(0x08 | 0x04);
         }
         write_successful = true;
     } else if (address == GENICAM_ACQUISITION_MODE_OFFSET && size >= 4) {
@@ -321,6 +718,18 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
         acquisition_mode = ntohl(*(uint32_t*)write_data);
         ESP_LOGI(TAG, "Acquisition mode set to: %d", acquisition_mode);
         write_successful = true;
+    } else if (address == GENICAM_PIXEL_FORMAT_OFFSET && size >= 4) {
+        // Pixel format
+        uint32_t format_value = ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_genicam_pixformat(format_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Pixel format set to: 0x%08X", format_value);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set pixel format: 0x%08X", format_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
     } else if (address == GENICAM_PACKET_DELAY_OFFSET && size >= 4) {
         // Packet delay (microseconds)
         uint32_t new_delay = ntohl(*(uint32_t*)write_data);
@@ -330,6 +739,8 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             write_successful = true;
         } else {
             ESP_LOGW(TAG, "Packet delay %d out of range (100-100000 us)", new_delay);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
         }
     } else if (address == GENICAM_FRAME_RATE_OFFSET && size >= 4) {
         // Frame rate (FPS)
@@ -340,6 +751,8 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             write_successful = true;
         } else {
             ESP_LOGW(TAG, "Frame rate %d out of range (1-30 FPS)", new_fps);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
         }
     } else if (address == GENICAM_PACKET_SIZE_OFFSET && size >= 4) {
         // Packet size
@@ -350,9 +763,111 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             write_successful = true;
         } else {
             ESP_LOGW(TAG, "Packet size %d out of range (512-%d bytes)", new_size, GVSP_DATA_PACKET_SIZE);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_JPEG_QUALITY_OFFSET && size >= 4) {
+        // JPEG quality
+        uint32_t quality_value = ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_jpeg_quality(quality_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "JPEG quality set to: %d", quality_value);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set JPEG quality: %d", quality_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_EXPOSURE_TIME_OFFSET && size >= 4) {
+        // Exposure time
+        uint32_t exposure_value = ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_exposure_time(exposure_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Exposure time set to: %lu us", exposure_value);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set exposure time: %lu us", exposure_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_GAIN_OFFSET && size >= 4) {
+        // Gain
+        uint32_t gain_value = ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_gain((int)gain_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Gain set to: %d dB", (int)gain_value);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set gain: %d dB", (int)gain_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_BRIGHTNESS_OFFSET && size >= 4) {
+        // Brightness
+        int32_t brightness_value = (int32_t)ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_brightness(brightness_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Brightness set to: %d", brightness_value);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set brightness: %d", brightness_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_CONTRAST_OFFSET && size >= 4) {
+        // Contrast
+        int32_t contrast_value = (int32_t)ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_contrast(contrast_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Contrast set to: %d", contrast_value);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set contrast: %d", contrast_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_SATURATION_OFFSET && size >= 4) {
+        // Saturation
+        int32_t saturation_value = (int32_t)ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_saturation(saturation_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Saturation set to: %d", saturation_value);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set saturation: %d", saturation_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_WHITE_BALANCE_MODE_OFFSET && size >= 4) {
+        // White balance mode
+        uint32_t wb_value = ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_white_balance_mode((int)wb_value);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "White balance mode set to: %s", wb_value == 0 ? "OFF" : "AUTO");
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set white balance mode: %d", (int)wb_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+    } else if (address == GENICAM_TRIGGER_MODE_OFFSET && size >= 4) {
+        // Trigger mode
+        uint32_t trigger_value = ntohl(*(uint32_t*)write_data);
+        esp_err_t ret = camera_set_trigger_mode((int)trigger_value);
+        if (ret == ESP_OK) {
+            const char* mode_str = trigger_value == 0 ? "OFF" : 
+                                  trigger_value == 1 ? "ON" : "SOFTWARE";
+            ESP_LOGI(TAG, "Trigger mode set to: %s", mode_str);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to set trigger mode: %d", (int)trigger_value);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
         }
     } else {
         ESP_LOGW(TAG, "Write denied to address 0x%08x (read-only or out of range)", address);
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_ADDRESS, client_addr);
+        return;
     }
     
     // Create write memory ACK response
@@ -369,13 +884,12 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
     *(uint32_t*)&response[sizeof(gvcp_header_t)] = htonl(address);
     
     // Send response
-    int err = sendto(sock, response, sizeof(response), 0,
-                    (struct sockaddr *)client_addr, sizeof(*client_addr));
+    esp_err_t err = gvcp_sendto(response, sizeof(response), client_addr);
     
     // Update client activity
     gvsp_update_client_activity();
-    if (err < 0) {
-        ESP_LOGE(TAG, "Error sending write memory ACK: errno %d", errno);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error sending write memory ACK");
     } else {
         ESP_LOGI(TAG, "Sent write memory ACK");
     }
@@ -383,19 +897,42 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
 
 static void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *client_addr)
 {
+    total_commands_received++;
+    
+    // Enhanced packet validation
     if (len < sizeof(gvcp_header_t)) {
-        ESP_LOGE(TAG, "Packet too small for GVCP header");
+        ESP_LOGE(TAG, "Packet too small for GVCP header: %d bytes", len);
+        return;
+    }
+    
+    if (packet == NULL || client_addr == NULL) {
+        ESP_LOGE(TAG, "NULL pointer in packet handler");
         return;
     }
     
     const gvcp_header_t *header = (const gvcp_header_t*)packet;
     const uint8_t *data = packet + sizeof(gvcp_header_t);
     
+    // Validate packet type
+    if (header->packet_type != GVCP_PACKET_TYPE_CMD) {
+        ESP_LOGW(TAG, "Invalid packet type: 0x%02x", header->packet_type);
+        return;
+    }
+    
     uint16_t command = ntohs(header->command);
     uint16_t packet_id = ntohs(header->id);
+    uint16_t payload_size = ntohs(header->size);
     
-    ESP_LOGI(TAG, "GVCP packet: type=0x%02x, cmd=0x%04x, id=0x%04x",
-             header->packet_type, command, packet_id);
+    // Validate payload size
+    if (len < sizeof(gvcp_header_t) + payload_size) {
+        ESP_LOGW(TAG, "Packet too small for declared payload: %d < %d", 
+                 len, sizeof(gvcp_header_t) + payload_size);
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_HEADER, client_addr);
+        return;
+    }
+    
+    ESP_LOGI(TAG, "GVCP packet: type=0x%02x, cmd=0x%04x, id=0x%04x, size=%d",
+             header->packet_type, command, packet_id, payload_size);
     
     switch (command) {
         case GVCP_CMD_DISCOVERY:
@@ -411,7 +948,9 @@ static void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_i
             break;
             
         default:
-            ESP_LOGW(TAG, "Unhandled GVCP command: 0x%04x", command);
+            ESP_LOGW(TAG, "Unknown GVCP command: 0x%04x", command);
+            total_unknown_commands++;
+            gvcp_send_nack(header, GVCP_ERROR_NOT_IMPLEMENTED, client_addr);
             break;
     }
 }
@@ -431,9 +970,34 @@ void gvcp_task(void *pvParameters)
                           (struct sockaddr *)&source_addr, &socklen);
 
         if (len < 0) {
-            ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
-            break;
+            ESP_LOGE(TAG, "recvfrom failed: errno %d (%s)", errno, strerror(errno));
+            gvcp_socket_error_count++;
+            
+            // Check for specific network errors that indicate socket issues
+            if (errno == EBADF || errno == ENOTSOCK || errno == ENETDOWN || errno == ENETUNREACH) {
+                ESP_LOGW(TAG, "Network/socket error detected in GVCP: errno %d", errno);
+                
+                // Trigger socket recreation if we've had enough errors
+                if (gvcp_socket_error_count >= gvcp_max_socket_errors) {
+                    ESP_LOGW(TAG, "Max GVCP socket errors reached (%d), attempting socket recreation", 
+                             gvcp_socket_error_count);
+                    esp_err_t recreate_result = gvcp_recreate_socket();
+                    if (recreate_result != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to recreate GVCP socket, will retry later");
+                        vTaskDelay(pdMS_TO_TICKS(5000)); // Wait 5 seconds before continuing
+                    }
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(1000)); // Wait 1 second before retry
+                }
+            } else {
+                // Other errors, just wait a bit
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
         } else if (len > 0) {
+            // Reset socket error count on successful receive
+            if (gvcp_socket_error_count > 0) {
+                gvcp_socket_error_count = 0;
+            }
             inet_ntoa_r(source_addr.sin_addr, addr_str, sizeof(addr_str) - 1);
             
             ESP_LOGI(TAG, "Received %d bytes from %s:%d", len, addr_str, ntohs(source_addr.sin_port));
@@ -470,4 +1034,37 @@ uint32_t gvcp_get_packet_size(void)
 void gvcp_set_stream_status(uint32_t status)
 {
     stream_status = status;
+}
+
+// Error statistics functions
+uint32_t gvcp_get_total_commands_received(void)
+{
+    return total_commands_received;
+}
+
+uint32_t gvcp_get_total_errors_sent(void)
+{
+    return total_errors_sent;
+}
+
+uint32_t gvcp_get_total_unknown_commands(void)
+{
+    return total_unknown_commands;
+}
+
+// Connection status management
+void gvcp_set_connection_status_bit(uint8_t bit_position, bool value)
+{
+    if (bit_position < 32) {
+        if (value) {
+            connection_status |= (1U << bit_position);
+        } else {
+            connection_status &= ~(1U << bit_position);
+        }
+    }
+}
+
+uint32_t gvcp_get_connection_status(void)
+{
+    return connection_status;
 }

@@ -64,3 +64,6 @@ dependencies.lock
 
 # Just command runner cache
 .just/
+
+# WiFi credentials
+.envrc

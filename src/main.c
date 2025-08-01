@@ -11,6 +11,7 @@
 #include "gvcp_handler.h"
 #include "gvsp_handler.h"
 #include "status_led.h"
+#include "web_server.h"
 
 static const char *TAG = "esp32_genicam";
 
@@ -48,6 +49,10 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Creating GVSP task...");
     xTaskCreate(gvsp_task, "gvsp_task", 4096, NULL, 4, NULL);
+
+    ESP_LOGI(TAG, "Initializing and starting web server...");
+    ESP_ERROR_CHECK(web_server_init());
+    ESP_ERROR_CHECK(web_server_start());
 
     ESP_LOGI(TAG, "ESP32 GenICam Camera initialized successfully");
     status_led_set_state(LED_STATE_ON);
