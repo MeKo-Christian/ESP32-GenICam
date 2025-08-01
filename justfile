@@ -117,12 +117,15 @@ flash-monitor port="/dev/ttyUSB0":
     @echo "Flashing and monitoring ESP32-CAM on {{port}}..."
     idf.py -p {{port}} flash monitor
 
-# Test UDP discovery with netcat (specify ESP32 IP address)
+# Test GVCP discovery with proper protocol (specify ESP32 IP address)
 test-discovery ip:
-    @echo "Testing UDP discovery on {{ip}}:3956..."
-    @echo "Sending test packet..."
-    @echo "test" | nc -u {{ip}} 3956 || echo "❌ Failed to send discovery packet"
-    @echo "Check ESP32 serial output for response"
+    @echo "Testing GVCP discovery on {{ip}}:3956..."
+    @python3 scripts/test_gvcp_discovery.py {{ip}} || echo "❌ GVCP discovery test failed"
+
+# Test GVCP discovery with verbose output for debugging
+test-discovery-verbose ip:
+    @echo "Testing GVCP discovery on {{ip}}:3956 (verbose mode)..."
+    @python3 scripts/test_gvcp_discovery.py {{ip}} --verbose || echo "❌ GVCP discovery test failed"
 
 # Test with Aravis discovery tools
 aravis-test:
@@ -264,7 +267,8 @@ help:
     @echo "  just flash-monitor      - Flash and monitor in one command"
     @echo ""
     @echo "Testing:"
-    @echo "  just test-discovery IP  - Test UDP discovery"
+    @echo "  just test-discovery IP  - Test GVCP discovery with proper protocol"
+    @echo "  just test-discovery-verbose IP - Test GVCP discovery with verbose output"
     @echo "  just aravis-test        - Test with Aravis tools"
     @echo "  just aravis-viewer      - Launch Aravis camera viewer"
     @echo "  just integration-test   - Full protocol test suite"
