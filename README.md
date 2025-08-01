@@ -1,184 +1,148 @@
-# ESP32-CAM GenICam (GigE Vision) Compatible Camera
+# ESP32-CAM GenICam Compatible Camera
 
-A PlatformIO project to make an ESP32-CAM GenICam-compatible for testing industrial vision software.
+🎥 **A complete GenICam/GigE Vision implementation for ESP32-CAM that works with existing industrial vision software**
 
-## Quick Start
+Transform your ESP32-CAM into a network-discoverable camera compatible with Aravis, Spinnaker, Vimba, and go-aravis applications.
 
-### Prerequisites
-1. **PlatformIO Core** - Install from [PlatformIO Install Guide](https://platformio.org/install/cli)
-2. **VSCode with PlatformIO Extension** (recommended)
-3. **ESP32-CAM module** (AI-Thinker or compatible)
-4. **WiFi network** for testing
+## ⚡ Quick Start
 
-### Build & Flash
+### 1. Setup Development Environment
 ```bash
-# Clone and navigate to project
-cd ESP32GenICam
-
-# Configure WiFi (edit platformio.ini)
-# Uncomment and set your WiFi credentials:
-# -D CONFIG_ESP_WIFI_SSID="YourWiFiSSID"
-# -D CONFIG_ESP_WIFI_PASSWORD="YourWiFiPassword"
-
-# Build and upload
-pio run
-pio run --target upload --upload-port /dev/ttyUSB0
-
-# Monitor output
-pio device monitor --port /dev/ttyUSB0 --baud 115200
+# Install dependencies and setup project
+just setup
 ```
 
-### Test Discovery
-```bash
-# Send test packet to ESP32's IP on port 3956
-echo "test" | nc -u <ESP32_IP_ADDRESS> 3956
-
-# Use Aravis tools to discover camera
-arv-tool-0.8 --debug=all
+### 2. Configure WiFi
+Edit `platformio.ini` and set your WiFi credentials:
+```ini
+; Uncomment and configure your WiFi
+-D CONFIG_ESP_WIFI_SSID="YourWiFiSSID"  
+-D CONFIG_ESP_WIFI_PASSWORD="YourWiFiPassword"
 ```
 
-## Project Overview
+### 3. Build, Flash & Run
+```bash
+# Complete development cycle: validate, build, flash, monitor
+just dev [/dev/ttyUSB0]
 
-This project implements a GenICam-compatible camera using GigE Vision protocol over WiFi. The ESP32-CAM appears as a network camera that can be discovered and controlled by existing industrial vision software using libraries like Aravis.
+# Or step by step:
+just build                    # Build project
+just flash [/dev/ttyUSB0]     # Flash to ESP32-CAM  
+just monitor [/dev/ttyUSB0]   # Monitor serial output
+```
 
-### Architecture
+### 4. Test Camera Discovery
+```bash
+# Test with Aravis tools
+just aravis-test              # Discover ESP32-CAM on network
+just aravis-viewer            # Launch camera viewer GUI
 
-The implementation consists of four main components:
+# Manual testing
+just test-discovery <ESP32_IP>    # Test UDP discovery
+```
 
-1. **GVCP (GigE Vision Control Protocol)** - UDP port 3956 for device discovery and control
-2. **GenICam XML Description** - Camera feature description served via memory reads  
-3. **Register Space** - Memory-mapped configuration and status registers
-4. **GVSP (GigE Vision Stream Protocol)** - UDP streaming of image frames
+## ✅ What's Implemented
 
-## Technical Details
+This is a **complete, working implementation** with:
 
-### GenICam and GigE Vision Basics
+- **🔍 Device Discovery** - Appears on network scans via GigE Vision protocol
+- **📡 GVCP Control** - Full bootstrap registers and memory access  
+- **📊 GenICam XML** - Standards-compliant camera feature description
+- **🎬 GVSP Streaming** - Real-time image transmission from ESP32-CAM
+- **📷 Real Camera** - Actual frame capture from OV2640 sensor (320x240 Mono8)
+- **🛠️ Complete Toolchain** - Build, flash, test, and debug workflow
 
-**GenICam** (Generic Interface for Cameras) defines how camera features are described and accessed using XML device descriptions. **GigE Vision** is the transport standard that works over Ethernet/WiFi using UDP/IP.
+## 🏗️ Architecture Overview
 
-GigE Vision has four key components:
-- **GVCP** - Device discovery, configuration, and control (UDP port 3956)
-- **GVSP** - High-speed image data transmission (separate UDP port)
-- **Device Discovery** - Network detection mechanism
-- **GenICam XML** - On-camera feature description file
+Multi-task ESP-IDF implementation with these core components:
 
-### Network Protocol Implementation
+- **GVCP Protocol** - Control and discovery on UDP port 3956
+- **GVSP Streaming** - Image transmission via UDP packets  
+- **GenICam XML** - Camera feature description served from memory
+- **Real Hardware** - ESP32-CAM OV2640 sensor integration
 
-**UDP Port Setup:** The camera listens on UDP port 3956 for all GVCP traffic including discovery packets and control commands. Responses use the same port.
+## 🔧 Development Commands
 
-**Device Discovery:** Implements GigE Vision discovery by parsing broadcast packets on port 3956 and responding with device identification (MAC, IP, version, XML pointer).
+The project uses **justfile** for streamlined development workflow:
 
-**GVCP Commands:**
-- **Read Memory/Registers** - Returns requested data bytes for XML download and feature reads
-- **Write Memory/Registers** - Accepts configuration changes (AcquisitionStart/Stop, settings)
-- **Bootstrap Registers** - Standard device info at known addresses
+### Core Operations
+```bash
+just setup                   # Install dependencies & validate environment
+just dev [port]              # Complete cycle: validate→build→flash→monitor
+just build                   # Build project only
+just flash [port]            # Flash to device  
+just monitor [port]          # Serial output monitoring
+just clean                   # Clean artifacts
+```
 
-### Device Memory Map
+### Testing & Debugging  
+```bash
+just test-discovery <ip>     # Test UDP discovery manually
+just aravis-test            # Discover with Aravis tools
+just aravis-viewer          # Launch GUI camera viewer
+just capture-packets        # Network protocol debugging
+just status                 # Project and network status
+just show-xml               # Display current GenICam XML
+```
 
-**Bootstrap Registers** at fixed addresses contain:
-- Device information strings (Manufacturer, Model, Version, Serial)
-- XML descriptor pointer (e.g., `Local:0x10000`)
-- Stream channel configuration (port numbers, packet size)
+### Configuration
+```bash
+just wifi-config            # Help with WiFi credentials setup
+just validate               # Validate GenICam XML compliance
+```
 
-**GenICam XML File** describes camera features:
-- Device identity matching bootstrap registers
-- Image format controls (Width, Height, PixelFormat)
-- Acquisition controls (Start/Stop commands)
-- Stream parameters (packet size, destination port)
+Use `just help` for complete command reference.
 
-### Image Streaming (GVSP)
+## 📁 Project Structure
 
-**Frame Structure:** Each image is transmitted as a sequence of UDP packets:
-1. **Leader packet** - Frame start with image info (size, format, block ID)
-2. **Data packets** - Image payload chunks (~1400 bytes each)
-3. **Trailer packet** - Frame end marker
-
-**Pixel Format:** Uses Mono8 (8-bit grayscale) converted from camera's YUV output.
-
-**Streaming Control:** Triggered by AcquisitionStart/Stop commands via GVCP.
-
-## Development Notes
-
-### PlatformIO Structure
-- Source files in `src/` directory
-- Configuration in `platformio.ini`
-- Custom libraries in `lib/` (if needed)
-- Build with `pio run`, upload with `pio run --target upload`
-
-### Multi-task Architecture
-- **GVCP Task** - Handles discovery and control on port 3956
-- **Camera Task** - Captures frames from ESP32-CAM sensor
-- **GVSP Task** - Streams images when acquisition is active
-
-Uses queues/shared state for inter-task communication with mutex protection.
-
-### Performance Considerations
-- Target: QVGA (320x240) grayscale at 2-3 FPS
-- WiFi limitations may require packet delays
-- Frame drops acceptable for testing purposes
-
-### Testing Strategy
-
-1. **GVCP Discovery** - Use Wireshark or `arv-tool` to verify device discovery
-2. **XML Download** - Confirm GenICam XML is accessible via memory reads
-3. **Frame Streaming** - Test image acquisition with dummy/real camera data
-4. **Integration** - Validate with Aravis-based applications
-
-### Hardware Support
-- Default pin configuration for AI-Thinker ESP32-CAM
-- Adjustable camera pins in `src/camera_handler.c`
-- WiFi preferred for easy microscope integration
-
-### Compliance Notes
-- Implements minimal GenICam feature set for testing
-- Uses Aravis as reference for protocol behavior
-- Not for commercial distribution (GigE Vision licensing)
-
-## File Structure
 ```
 ESP32GenICam/
-├── platformio.ini          # PlatformIO configuration
-├── src/                    # Source files
-│   ├── main.c             # Main application
-│   ├── gvcp_handler.c     # GVCP protocol implementation
-│   ├── camera_handler.c   # ESP32-CAM interface
-│   ├── wifi_manager.c     # WiFi connection management
-│   └── genicam_xml.c      # GenICam XML serving
-├── lib/                   # Custom libraries (if needed)
-└── README.md              # This file
+├── justfile               # Development workflow commands
+├── platformio.ini         # Build config & WiFi credentials
+├── src/                   # Core implementation
+│   ├── main.c            # Application entry point
+│   ├── wifi_manager.*    # Network connectivity  
+│   ├── gvcp_handler.*    # Control protocol (port 3956)
+│   ├── gvsp_handler.*    # Streaming protocol
+│   ├── camera_handler.*  # ESP32-CAM hardware interface
+│   └── genicam_xml.*     # XML feature description
+├── components/           # ESP32-camera driver integration
+├── tools/schema/         # GenICam XML validation
+└── CLAUDE.md            # Developer architecture guide
 ```
 
-## Expected Behavior
+## 🎯 Expected Behavior
 
-1. **WiFi Connection** - ESP32 connects and gets IP address
-2. **Camera Init** - OV2640 sensor initializes for grayscale capture
-3. **GVCP Socket** - Binds to port 3956 for control protocol
-4. **Discovery Response** - Responds to network scans from vision software
-5. **XML Serving** - Provides GenICam feature description
-6. **Image Streaming** - Transmits frames on acquisition commands
+1. **📶 WiFi Connection** - ESP32 connects and gets IP address
+2. **📷 Camera Init** - OV2640 sensor initializes for 320x240 grayscale
+3. **🔍 Network Discovery** - Responds to GigE Vision discovery scans
+4. **📋 XML Serving** - Provides GenICam feature description via GVCP
+5. **🎬 Image Streaming** - Transmits real camera frames via GVSP
 
-## Integration with Existing Software
+## 💻 Compatible Software
 
-This camera appears as a standard GenICam device to software using:
-- Aravis library (Linux)
-- Spinnaker SDK (FLIR/Point Grey)
-- Vimba SDK (Allied Vision)  
-- Generic GenICam clients
+Works with existing GenICam/GigE Vision applications:
 
-Use with go-aravis or other Aravis-based applications by treating as any other GigE Vision camera.
+- **Aravis Library** (Linux) - `arv-tool`, `arv-viewer`
+- **go-aravis** - Go language bindings  
+- **Spinnaker SDK** (FLIR/Point Grey)
+- **Vimba SDK** (Allied Vision)
+- **Custom Applications** - Any GenICam-compatible software
 
-## Troubleshooting
+## 🚨 Troubleshooting
 
-- **Discovery fails**: Check WiFi connection, firewall settings, port 3956
-- **XML errors**: Verify GenICam XML syntax and memory addressing
-- **No images**: Confirm GVSP port configuration and packet format
-- **Frame drops**: Adjust packet delays or reduce resolution/frame rate
+| Issue | Check | Solution |
+|-------|-------|----------|
+| Discovery fails | WiFi connection, port 3956 | `just status`, firewall settings |
+| XML errors | GenICam compliance | `just validate` |
+| No images | GVSP streaming | `just capture-packets`, check acquisition |
+| Build issues | Dependencies | `just setup`, check PlatformIO |
 
-Use Wireshark to capture UDP traffic for protocol debugging.
+Use `just capture-packets` to debug network protocol with Wireshark.
 
-## References
+## 📖 References
 
-- [GigE Vision Standard Overview](https://en.wikipedia.org/wiki/GigE_Vision)
-- [Aravis Project](https://github.com/AravisProject/aravis) - Reference client implementation
-- [GenICam Standard](https://www.emva.org/standards-technology/genicam/) - Feature description format
-- [PlatformIO ESP32](https://docs.platformio.org/en/latest/platforms/espressif32.html) - Development platform
+- **[GigE Vision Standard](https://en.wikipedia.org/wiki/GigE_Vision)** - Protocol specification
+- **[Aravis Project](https://github.com/AravisProject/aravis)** - Reference implementation  
+- **[GenICam Standard](https://www.emva.org/standards-technology/genicam/)** - Camera description format
+- **[ESP32 Camera Component](https://github.com/espressif/esp32-camera)** - Hardware driver

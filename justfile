@@ -23,7 +23,11 @@ validate:
 # Build the ESP32 project
 build:
     @echo "Building ESP32-CAM project..."
-    pio run
+    @echo "Configuring build system..."
+    @pio run --target configuredata 2>/dev/null || true
+    @echo "Building with ninja..."
+    @cd .pio/build/esp32cam && ninja ESP32GenICam.elf
+    @echo "✅ Build completed: ESP32GenICam.elf"
 
 # Clean build artifacts
 clean:
@@ -35,7 +39,11 @@ clean:
 # Flash to ESP32-CAM device (specify port, defaults to /dev/ttyUSB0)
 flash port="/dev/ttyUSB0":
     @echo "Flashing to ESP32-CAM on {{port}}..."
-    pio run --target upload --upload-port {{port}}
+    @echo "Configuring flash targets..."
+    @pio run --target configuredata 2>/dev/null || true
+    @echo "Flashing with ninja..."
+    @cd .pio/build/esp32cam && ninja flash ESPPORT={{port}}
+    @echo "✅ Flash completed"
 
 # Monitor serial output (specify port, defaults to /dev/ttyUSB0)
 monitor port="/dev/ttyUSB0":
@@ -46,7 +54,10 @@ monitor port="/dev/ttyUSB0":
 # Flash and monitor in sequence (specify port, defaults to /dev/ttyUSB0)
 flash-monitor port="/dev/ttyUSB0":
     @echo "Flashing and monitoring ESP32-CAM on {{port}}..."
-    pio run --target upload --upload-port {{port}}
+    @echo "Configuring flash targets..."
+    @pio run --target configuredata 2>/dev/null || true
+    @echo "Flashing with ninja..."
+    @cd .pio/build/esp32cam && ninja flash ESPPORT={{port}}
     @echo "Switching to monitor mode..."
     @sleep 2
     pio device monitor --port {{port}} --baud 115200

@@ -9,6 +9,7 @@
 #include "wifi_manager.h"
 #include "camera_handler.h"
 #include "gvcp_handler.h"
+#include "gvsp_handler.h"
 
 static const char *TAG = "esp32_genicam";
 
@@ -35,8 +36,14 @@ void app_main(void)
     ESP_LOGI(TAG, "Initializing GVCP handler...");
     ESP_ERROR_CHECK(gvcp_init());
 
+    ESP_LOGI(TAG, "Initializing GVSP handler...");
+    ESP_ERROR_CHECK(gvsp_init());
+
     ESP_LOGI(TAG, "Creating GVCP task...");
     xTaskCreate(gvcp_task, "gvcp_task", 4096, NULL, 5, NULL);
+
+    ESP_LOGI(TAG, "Creating GVSP task...");
+    xTaskCreate(gvsp_task, "gvsp_task", 4096, NULL, 4, NULL);
 
     ESP_LOGI(TAG, "ESP32 GenICam Camera initialized successfully");
 }

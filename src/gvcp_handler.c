@@ -1,5 +1,11 @@
 #include "gvcp_handler.h"
 #include "genicam_xml.h"
+#include "gvsp_handler.h"
+
+// Default GVSP packet size if not defined
+#ifndef GVSP_DATA_PACKET_SIZE
+#define GVSP_DATA_PACKET_SIZE 1400
+#endif
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -25,6 +31,17 @@ static uint8_t bootstrap_memory[GVBS_DISCOVERY_DATA_SIZE];
 
 // XML memory mapping
 #define XML_BASE_ADDRESS 0x10000
+
+// Acquisition control state
+static uint32_t acquisition_mode = 0; // 0 = Continuous
+static uint32_t acquisition_start_reg = 0;
+static uint32_t acquisition_stop_reg = 0;
+
+// Stream control parameters
+static uint32_t packet_delay_us = 1000; // Inter-packet delay in microseconds (default 1ms)
+static uint32_t frame_rate_fps = 1; // Frame rate in FPS (default 1 FPS)
+static uint32_t packet_size = GVSP_DATA_PACKET_SIZE; // Data packet size (default 1400)
+static uint32_t stream_status = 0; // Stream status register
 
 static void init_bootstrap_memory(void)
 {
@@ -129,6 +146,9 @@ static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in
         ESP_LOGE(TAG, "Error sending discovery ACK: errno %d", errno);
     } else {
         ESP_LOGI(TAG, "Sent discovery ACK (%d bytes)", sizeof(response));
+        
+        // Set GVSP client address for streaming
+        gvsp_set_client_address(client_addr);
     }
 }
 
@@ -185,6 +205,55 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         if (xml_read_size < size) {
             memset(data_ptr + xml_read_size, 0, size - xml_read_size);
         }
+    } else if (address == GENICAM_ACQUISITION_START_OFFSET && size >= 4) {
+        // Acquisition start register
+        uint32_t reg_value = htonl(acquisition_start_reg);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_ACQUISITION_STOP_OFFSET && size >= 4) {
+        // Acquisition stop register
+        uint32_t reg_value = htonl(acquisition_stop_reg);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_ACQUISITION_MODE_OFFSET && size >= 4) {
+        // Acquisition mode register
+        uint32_t reg_value = htonl(acquisition_mode);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_PACKET_DELAY_OFFSET && size >= 4) {
+        // Packet delay register (microseconds)
+        uint32_t reg_value = htonl(packet_delay_us);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_FRAME_RATE_OFFSET && size >= 4) {
+        // Frame rate register (FPS)
+        uint32_t reg_value = htonl(frame_rate_fps);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_PACKET_SIZE_OFFSET && size >= 4) {
+        // Packet size register
+        uint32_t reg_value = htonl(packet_size);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_STREAM_STATUS_OFFSET && size >= 4) {
+        // Stream status register
+        uint32_t reg_value = htonl(stream_status);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
     } else {
         // Unknown memory region - return zeros
         memset(data_ptr, 0, size);
@@ -193,6 +262,9 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
     // Send response
     int err = sendto(sock, response, sizeof(gvcp_header_t) + 4 + size, 0,
                     (struct sockaddr *)client_addr, sizeof(*client_addr));
+    
+    // Update client activity
+    gvsp_update_client_activity();
     if (err < 0) {
         ESP_LOGE(TAG, "Error sending read memory ACK: errno %d", errno);
     } else {
@@ -213,16 +285,69 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
     
     ESP_LOGI(TAG, "Write memory: addr=0x%08x, size=%d", address, size);
     
-    // For now, only allow writes to certain bootstrap registers (user-defined name, etc.)
-    bool write_allowed = false;
+    // Handle different write regions
+    bool write_successful = false;
+    
     if (address >= GVBS_USER_DEFINED_NAME_OFFSET && 
         address + size <= GVBS_USER_DEFINED_NAME_OFFSET + 16) {
-        write_allowed = true;
-    }
-    
-    if (write_allowed && address + size <= GVBS_DISCOVERY_DATA_SIZE) {
+        // Bootstrap user-defined name
         memcpy(&bootstrap_memory[address], write_data, size);
-        ESP_LOGI(TAG, "Write successful to address 0x%08x", address);
+        write_successful = true;
+        ESP_LOGI(TAG, "Write successful to bootstrap address 0x%08x", address);
+    } else if (address == GENICAM_ACQUISITION_START_OFFSET && size >= 4) {
+        // Acquisition start command
+        uint32_t command_value = ntohl(*(uint32_t*)write_data);
+        if (command_value == 1) {
+            ESP_LOGI(TAG, "Acquisition start command received");
+            gvsp_start_streaming();
+            acquisition_start_reg = 1;
+        }
+        write_successful = true;
+    } else if (address == GENICAM_ACQUISITION_STOP_OFFSET && size >= 4) {
+        // Acquisition stop command
+        uint32_t command_value = ntohl(*(uint32_t*)write_data);
+        if (command_value == 1) {
+            ESP_LOGI(TAG, "Acquisition stop command received");
+            gvsp_stop_streaming();
+            gvsp_clear_client_address();
+            acquisition_stop_reg = 1;
+        }
+        write_successful = true;
+    } else if (address == GENICAM_ACQUISITION_MODE_OFFSET && size >= 4) {
+        // Acquisition mode
+        acquisition_mode = ntohl(*(uint32_t*)write_data);
+        ESP_LOGI(TAG, "Acquisition mode set to: %d", acquisition_mode);
+        write_successful = true;
+    } else if (address == GENICAM_PACKET_DELAY_OFFSET && size >= 4) {
+        // Packet delay (microseconds)
+        uint32_t new_delay = ntohl(*(uint32_t*)write_data);
+        if (new_delay >= 100 && new_delay <= 100000) { // 0.1ms to 100ms range
+            packet_delay_us = new_delay;
+            ESP_LOGI(TAG, "Packet delay set to: %d microseconds", packet_delay_us);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Packet delay %d out of range (100-100000 us)", new_delay);
+        }
+    } else if (address == GENICAM_FRAME_RATE_OFFSET && size >= 4) {
+        // Frame rate (FPS)
+        uint32_t new_fps = ntohl(*(uint32_t*)write_data);
+        if (new_fps >= 1 && new_fps <= 30) { // 1-30 FPS range
+            frame_rate_fps = new_fps;
+            ESP_LOGI(TAG, "Frame rate set to: %d FPS", frame_rate_fps);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Frame rate %d out of range (1-30 FPS)", new_fps);
+        }
+    } else if (address == GENICAM_PACKET_SIZE_OFFSET && size >= 4) {
+        // Packet size
+        uint32_t new_size = ntohl(*(uint32_t*)write_data);
+        if (new_size >= 512 && new_size <= GVSP_DATA_PACKET_SIZE) {
+            packet_size = new_size;
+            ESP_LOGI(TAG, "Packet size set to: %d bytes", packet_size);
+            write_successful = true;
+        } else {
+            ESP_LOGW(TAG, "Packet size %d out of range (512-%d bytes)", new_size, GVSP_DATA_PACKET_SIZE);
+        }
     } else {
         ESP_LOGW(TAG, "Write denied to address 0x%08x (read-only or out of range)", address);
     }
@@ -243,6 +368,9 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
     // Send response
     int err = sendto(sock, response, sizeof(response), 0,
                     (struct sockaddr *)client_addr, sizeof(*client_addr));
+    
+    // Update client activity
+    gvsp_update_client_activity();
     if (err < 0) {
         ESP_LOGE(TAG, "Error sending write memory ACK: errno %d", errno);
     } else {
@@ -318,4 +446,25 @@ void gvcp_task(void *pvParameters)
         close(sock);
     }
     vTaskDelete(NULL);
+}
+
+// Stream configuration getter functions
+uint32_t gvcp_get_packet_delay_us(void)
+{
+    return packet_delay_us;
+}
+
+uint32_t gvcp_get_frame_rate_fps(void)
+{
+    return frame_rate_fps;
+}
+
+uint32_t gvcp_get_packet_size(void)
+{
+    return packet_size;
+}
+
+void gvcp_set_stream_status(uint32_t status)
+{
+    stream_status = status;
 }

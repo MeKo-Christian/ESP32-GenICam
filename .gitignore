@@ -5,6 +5,14 @@ build/
 *.elf
 *.map
 
+# ESP-IDF specific
+sdkconfig
+sdkconfig.old
+sdkconfig.esp32cam
+sdkconfig.defaults.esp32cam
+managed_components/
+components/
+
 # Generated validation files
 esp32_genicam.xml
 *.xml.tmp
@@ -40,8 +48,19 @@ __pycache__/
 # Documentation build artifacts
 docs/_build/
 *.pdf
+docs.txt
 
 # Platform-specific
 .platformio/
 .pio/
 compile_commands.json
+
+# Dependencies and lock files
+dependencies.lock
+
+# Network captures and debug files
+*.pcap
+*.pcapng
+
+# Just command runner cache
+.just/
