@@ -2,7 +2,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
-#include "esp_spi_flash.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 
@@ -11,7 +10,9 @@
 #include "gvcp_handler.h"
 #include "gvsp_handler.h"
 #include "status_led.h"
+#ifdef CONFIG_ENABLE_WEB_SERVER
 #include "web_server.h"
+#endif
 
 static const char *TAG = "esp32_genicam";
 
@@ -45,14 +46,18 @@ void app_main(void)
     ESP_ERROR_CHECK(gvsp_init());
 
     ESP_LOGI(TAG, "Creating GVCP task...");
-    xTaskCreate(gvcp_task, "gvcp_task", 4096, NULL, 5, NULL);
+    xTaskCreate(gvcp_task, "gvcp_task", 4096, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "Creating GVSP task...");
-    xTaskCreate(gvsp_task, "gvsp_task", 4096, NULL, 4, NULL);
+    xTaskCreate(gvsp_task, "gvsp_task", 4096, NULL, 3, NULL);
 
+#ifdef CONFIG_ENABLE_WEB_SERVER
     ESP_LOGI(TAG, "Initializing and starting web server...");
     ESP_ERROR_CHECK(web_server_init());
     ESP_ERROR_CHECK(web_server_start());
+#else
+    ESP_LOGI(TAG, "Web server disabled (saves memory)");
+#endif
 
     ESP_LOGI(TAG, "ESP32 GenICam Camera initialized successfully");
     status_led_set_state(LED_STATE_ON);

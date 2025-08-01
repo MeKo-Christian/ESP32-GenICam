@@ -4,6 +4,7 @@
 #include "esp_http_server.h"
 #include "cJSON.h"
 #include <string.h>
+#include <sys/param.h>  // For MIN macro
 
 static const char *TAG = "web_server";
 static httpd_handle_t web_server_handle = NULL;
@@ -352,7 +353,7 @@ esp_err_t handle_camera_control_post(httpd_req_t *req)
     cJSON *json = cJSON_Parse(content);
     if (json == NULL) {
         ESP_LOGE(TAG, "Failed to parse JSON");
-        httpd_resp_send_400(req);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
     

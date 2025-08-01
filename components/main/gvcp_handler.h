@@ -2,6 +2,9 @@
 
 #include "esp_err.h"
 #include <stdint.h>
+#include <stdbool.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #define GVCP_PORT 3956
 

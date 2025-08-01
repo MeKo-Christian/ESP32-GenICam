@@ -10,5 +10,5 @@
 #
 # Note: .envrc is gitignored for security
 
-export WIFI_SSID="YourWiFiSSID"
-export WIFI_PASSWORD="YourWiFiPassword"
+export WIFI_SSID="YOUR_WIFI_NETWORK_NAME"
+export WIFI_PASSWORD="YOUR_WIFI_PASSWORD"

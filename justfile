@@ -1,4 +1,4 @@
-# ESP32-CAM GenICam Development Justfile
+# ESP32-CAM GenICam Development Justfile (ESP-IDF Native)
 # Usage: just <command>
 
 # Default recipe - show available commands
@@ -9,12 +9,23 @@ default:
 setup:
     @echo "Setting up ESP32-CAM GenICam development environment..."
     @echo "Checking for required tools..."
-    @which pio > /dev/null || (echo "❌ PlatformIO not found. Install with: pip install platformio" && exit 1)
+    @just _check-esp-idf
     @which xmllint > /dev/null || (echo "❌ xmllint not found. Install with: sudo apt install libxml2-utils" && exit 1)
     @which arv-test-0.8 > /dev/null || echo "⚠️  Aravis tools not found. Install with: sudo apt install aravis-tools"
     @echo "Setting up WiFi configuration..."
     @just _setup-wifi-config
     @echo "✅ Development environment ready"
+
+# Internal: Check ESP-IDF environment
+_check-esp-idf:
+    @if [ -z "$IDF_PATH" ]; then \
+        echo "❌ ESP-IDF environment not sourced"; \
+        echo "   Please run: source ~/esp/esp-idf/export.sh"; \
+        echo "   (adjust path to your ESP-IDF installation)"; \
+        exit 1; \
+    fi
+    @which idf.py > /dev/null || (echo "❌ idf.py not found in PATH" && exit 1)
+    @echo "✅ ESP-IDF environment detected: $IDF_PATH"
 
 # Internal: Setup WiFi configuration from template
 _setup-wifi-config:
@@ -26,8 +37,11 @@ _setup-wifi-config:
             echo "⚠️  Please edit .envrc with your WiFi credentials"; \
             echo "   Then run: direnv allow"; \
         else \
-            echo "❌ .envrc.example not found"; \
-            exit 1; \
+            echo "Creating .envrc template..."; \
+            echo "export WIFI_SSID=\"YOUR_WIFI_NETWORK_NAME\"" > .envrc; \
+            echo "export WIFI_PASSWORD=\"YOUR_WIFI_PASSWORD\"" >> .envrc; \
+            echo "⚠️  Please edit .envrc with your WiFi credentials"; \
+            echo "   Then run: direnv allow"; \
         fi; \
     else \
         echo "✅ WiFi configuration file exists"; \
@@ -39,15 +53,26 @@ validate:
     @chmod +x scripts/validate_genicam.sh
     @./scripts/validate_genicam.sh
 
+# Set ESP-IDF target to esp32
+set-target:
+    @echo "Setting IDF target to esp32..."
+    @just _check-esp-idf
+    @just _validate-wifi-config
+    idf.py set-target esp32
+
+# Configure the project (menuconfig)
+config:
+    @echo "Opening ESP-IDF configuration menu..."
+    idf.py menuconfig
+
 # Build the ESP32 project
 build:
-    @echo "Building ESP32-CAM project..."
+    @echo "Building ESP32-CAM project with ESP-IDF..."
+    @just _check-esp-idf
     @just _validate-wifi-config
-    @echo "Configuring build system..."
-    @pio run --target configuredata 2>/dev/null || true
-    @echo "Building with ninja..."
-    @cd .pio/build/esp32cam && ninja ESP32GenICam.elf
-    @echo "✅ Build completed: ESP32GenICam.elf"
+    @just _update-wifi-config
+    idf.py build
+    @echo "✅ Build completed"
 
 # Internal: Validate WiFi configuration before build operations
 _validate-wifi-config:
@@ -57,38 +82,40 @@ _validate-wifi-config:
         echo "   Or use direnv with .envrc file (run 'just wifi-config' for help)"; \
     fi
 
+# Internal: Update WiFi configuration in sdkconfig.defaults
+_update-wifi-config:
+    @if [ -n "${WIFI_SSID}" ] && [ -n "${WIFI_PASSWORD}" ]; then \
+        echo "📝 Updating WiFi configuration in sdkconfig.defaults..."; \
+        grep -q "CONFIG_ESP_WIFI_SSID" sdkconfig.defaults || echo 'CONFIG_ESP_WIFI_SSID=""' >> sdkconfig.defaults; \
+        grep -q "CONFIG_ESP_WIFI_PASSWORD" sdkconfig.defaults || echo 'CONFIG_ESP_WIFI_PASSWORD=""' >> sdkconfig.defaults; \
+        sed -i "s/CONFIG_ESP_WIFI_SSID=.*/CONFIG_ESP_WIFI_SSID=\"${WIFI_SSID}\"/" sdkconfig.defaults; \
+        sed -i "s/CONFIG_ESP_WIFI_PASSWORD=.*/CONFIG_ESP_WIFI_PASSWORD=\"${WIFI_PASSWORD}\"/" sdkconfig.defaults; \
+        echo "✅ WiFi configuration updated"; \
+    fi
+
 # Clean build artifacts
 clean:
     @echo "Cleaning build artifacts..."
-    pio run --target clean
+    idf.py fullclean
     @rm -f esp32_genicam.xml
     @echo "✅ Build artifacts cleaned"
 
 # Flash to ESP32-CAM device (specify port, defaults to /dev/ttyUSB0)
 flash port="/dev/ttyUSB0":
     @echo "Flashing to ESP32-CAM on {{port}}..."
-    @echo "Configuring flash targets..."
-    @pio run --target configuredata 2>/dev/null || true
-    @echo "Flashing with ninja..."
-    @cd .pio/build/esp32cam && ninja flash ESPPORT={{port}}
+    idf.py -p {{port}} flash
     @echo "✅ Flash completed"
 
 # Monitor serial output (specify port, defaults to /dev/ttyUSB0)
 monitor port="/dev/ttyUSB0":
     @echo "Monitoring serial output on {{port}}..."
-    @echo "Press Ctrl+C to exit"
-    pio device monitor --port {{port}} --baud 115200
+    @echo "Press Ctrl+] to exit"
+    idf.py -p {{port}} monitor
 
 # Flash and monitor in sequence (specify port, defaults to /dev/ttyUSB0)
 flash-monitor port="/dev/ttyUSB0":
     @echo "Flashing and monitoring ESP32-CAM on {{port}}..."
-    @echo "Configuring flash targets..."
-    @pio run --target configuredata 2>/dev/null || true
-    @echo "Flashing with ninja..."
-    @cd .pio/build/esp32cam && ninja flash ESPPORT={{port}}
-    @echo "Switching to monitor mode..."
-    @sleep 2
-    pio device monitor --port {{port}} --baud 115200
+    idf.py -p {{port}} flash monitor
 
 # Test UDP discovery with netcat (specify ESP32 IP address)
 test-discovery ip:
@@ -122,6 +149,9 @@ status:
     @echo "Build status:"
     @if [ -d "build" ]; then echo "✅ Build directory exists"; else echo "❌ No build directory"; fi
     @echo ""
+    @echo "ESP-IDF environment:"
+    @if [ -n "$IDF_PATH" ]; then echo "✅ IDF_PATH: $IDF_PATH"; else echo "❌ IDF_PATH not set"; fi
+    @echo ""
     @echo "Network interfaces:"
     @ip route | grep default | head -1
     @echo ""
@@ -142,13 +172,13 @@ capture-packets interface="any":
     sudo tcpdump -i {{interface}} -nn port 3956
 
 # Quick development cycle: validate, build, flash, monitor
-dev port="/dev/ttyUSB0": validate build (flash port) (monitor port)
+dev port="/dev/ttyUSB0": set-target validate build (flash port) (monitor port)
 
 # Show ESP32 device information
 device-info port="/dev/ttyUSB0":
     @echo "ESP32 device information on {{port}}:"
     @echo "======================================"
-    @pio device list | grep {{port}} || echo "Device not found on {{port}}"
+    @python -m serial.tools.list_ports {{port}} || echo "Device not found on {{port}}"
 
 # WiFi configuration management
 wifi-config:
@@ -161,9 +191,10 @@ wifi-config:
         grep "WIFI_" .envrc || echo "No WIFI_ variables found"; \
     else \
         echo "❌ WiFi configuration file not found"; \
-        echo "Creating .envrc from template..."; \
-        cp .envrc.example .envrc; \
-        echo "✅ Created .envrc from template"; \
+        echo "Creating .envrc template..."; \
+        echo "export WIFI_SSID=\"YOUR_WIFI_NETWORK_NAME\"" > .envrc; \
+        echo "export WIFI_PASSWORD=\"YOUR_WIFI_PASSWORD\"" >> .envrc; \
+        echo "✅ Created .envrc template"; \
     fi
     @echo ""
     @echo "Setup instructions:"
@@ -199,18 +230,38 @@ integration-test:
     @echo "✅ Integration test complete. Check output above for any warnings."
     @echo "💡 Use 'just capture-packets' to debug protocol issues"
 
+# Show build size information
+size:
+    @echo "ESP32 application size information:"
+    @if [ -f "build/ESP32GenICam.elf" ]; then \
+        idf.py size; \
+    else \
+        echo "❌ Build first with 'just build'"; \
+    fi
+
+# Erase flash memory
+erase-flash port="/dev/ttyUSB0":
+    @echo "Erasing flash memory on {{port}}..."
+    idf.py -p {{port}} erase_flash
+
 # Development help
 help:
-    @echo "ESP32-CAM GenICam Development Commands"
-    @echo "======================================"
+    @echo "ESP32-CAM GenICam Development Commands (ESP-IDF Native)"
+    @echo "======================================================="
+    @echo ""
+    @echo "Setup & Configuration:"
+    @echo "  just setup              - Setup development environment"
+    @echo "  just set-target         - Set ESP-IDF target to esp32"
+    @echo "  just config             - Open menuconfig"
+    @echo "  just wifi-config        - Help with WiFi configuration"
     @echo ""
     @echo "Development workflow:"
-    @echo "  just setup              - Setup development environment"
-    @echo "  just dev [port]         - Full development cycle (validate, build, flash, monitor)"
+    @echo "  just dev [port]         - Full development cycle (set-target, validate, build, flash, monitor)"
     @echo "  just validate           - Validate GenICam XML"
     @echo "  just build              - Build project"
     @echo "  just flash [port]       - Flash to device"
     @echo "  just monitor [port]     - Monitor serial output"
+    @echo "  just flash-monitor      - Flash and monitor in one command"
     @echo ""
     @echo "Testing:"
     @echo "  just test-discovery IP  - Test UDP discovery"
@@ -221,8 +272,9 @@ help:
     @echo "Utilities:"
     @echo "  just status             - Show project status"
     @echo "  just show-xml           - Display current XML"
-    @echo "  just wifi-config        - Help with WiFi configuration"
+    @echo "  just size               - Show build size information"
     @echo "  just clean              - Clean build artifacts"
+    @echo "  just erase-flash        - Erase ESP32 flash memory"
     @echo ""
     @echo "Network debugging:"
     @echo "  just capture-packets    - Capture GVCP network traffic"

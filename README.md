@@ -13,11 +13,14 @@ just setup
 ```
 
 ### 2. Configure WiFi
-Edit `platformio.ini` and set your WiFi credentials:
-```ini
-; Uncomment and configure your WiFi
--D CONFIG_ESP_WIFI_SSID="YourWiFiSSID"  
--D CONFIG_ESP_WIFI_PASSWORD="YourWiFiPassword"
+Set your WiFi credentials using environment variables:
+```bash
+# Edit .envrc with your WiFi credentials
+export WIFI_SSID="YOUR_WIFI_NETWORK_NAME"  
+export WIFI_PASSWORD="YOUR_WIFI_PASSWORD"
+
+# If using direnv:
+direnv allow
 ```
 
 ### 3. Build, Flash & Run
@@ -98,7 +101,7 @@ Use `just help` for complete command reference.
 ```
 ESP32GenICam/
 ├── justfile               # Development workflow commands
-├── platformio.ini         # Build config & WiFi credentials
+├── .envrc                 # WiFi credentials (environment variables)
 ├── src/                   # Core implementation
 │   ├── main.c            # Application entry point
 │   ├── wifi_manager.*    # Network connectivity  
@@ -136,7 +139,7 @@ Works with existing GenICam/GigE Vision applications:
 | Discovery fails | WiFi connection, port 3956 | `just status`, firewall settings |
 | XML errors | GenICam compliance | `just validate` |
 | No images | GVSP streaming | `just capture-packets`, check acquisition |
-| Build issues | Dependencies | `just setup`, check PlatformIO |
+| Build issues | Dependencies, WiFi config | `just setup`, `just wifi-config` |
 
 ### Network Protocol Debugging
 

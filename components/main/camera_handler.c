@@ -3,8 +3,10 @@
 #include "esp_system.h"
 #include "esp_camera.h"
 #include "esp_jpg_decode.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "driver/ledc.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,20 +30,15 @@ static int saturation_value = 0;           // 0 default (-2 to +2)
 static int white_balance_mode = WB_MODE_AUTO; // Auto white balance default
 static int trigger_mode = TRIGGER_MODE_OFF;   // Free running default
 
-// Frame conversion buffer for format conversion (Mono8)
-static uint8_t conversion_buffer[CAMERA_WIDTH * CAMERA_HEIGHT];
+// Frame conversion buffer for format conversion (Mono8) - allocated in PSRAM
+static uint8_t *conversion_buffer = NULL;
 
-// JPEG frame buffer for direct JPEG streaming (larger to accommodate compression)
-static uint8_t jpeg_buffer[32768]; // 32KB buffer for JPEG frames
+// JPEG frame buffer for direct JPEG streaming - allocated in PSRAM
+static uint8_t *jpeg_buffer = NULL;
 
-// RGB565 buffer (2 bytes per pixel)
-static uint8_t rgb565_buffer[CAMERA_WIDTH * CAMERA_HEIGHT * 2];
-
-// YUV422 buffer (2 bytes per pixel)
-static uint8_t yuv422_buffer[CAMERA_WIDTH * CAMERA_HEIGHT * 2];
-
-// RGB888 buffer (3 bytes per pixel)
-static uint8_t rgb888_buffer[CAMERA_WIDTH * CAMERA_HEIGHT * 3];
+// Shared multi-format buffer - allocated in PSRAM and reused for different formats
+static uint8_t *format_buffer = NULL;
+static size_t format_buffer_size = CAMERA_WIDTH * CAMERA_HEIGHT * 3; // Max size (RGB888)
 
 // RGB buffer for JPEG decoding (3 bytes per pixel)
 static uint8_t *rgb_decode_buffer = NULL;
@@ -234,6 +231,20 @@ esp_err_t camera_init(void)
 {
     ESP_LOGI(TAG, "Initializing ESP32-CAM...");
     
+    // Initialize LEDC peripheral first to prevent LEDC timer errors
+    ESP_LOGI(TAG, "Initializing LEDC for camera XCLK...");
+    ledc_timer_config_t ledc_timer = {
+        .duty_resolution = LEDC_TIMER_1_BIT,
+        .freq_hz = 20000000,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = LEDC_TIMER_0
+    };
+    esp_err_t ledc_err = ledc_timer_config(&ledc_timer);
+    if (ledc_err != ESP_OK) {
+        ESP_LOGE(TAG, "LEDC timer config failed: %s", esp_err_to_name(ledc_err));
+        return ledc_err;
+    }
+    
     // ESP32-CAM pin configuration from platformio.ini
     camera_config_t config = {
         .pin_pwdn  = CONFIG_CAMERA_PIN_PWDN,
@@ -278,6 +289,36 @@ esp_err_t camera_init(void)
     use_real_camera = true;
     ESP_LOGI(TAG, "ESP32-CAM initialized successfully: %dx%d, format=GRAYSCALE", 
              CAMERA_WIDTH, CAMERA_HEIGHT);
+    
+    // Allocate camera buffers in PSRAM to save DRAM
+    ESP_LOGI(TAG, "Allocating camera buffers in PSRAM...");
+    
+    // Conversion buffer for Mono8 format
+    conversion_buffer = heap_caps_malloc(CAMERA_WIDTH * CAMERA_HEIGHT, MALLOC_CAP_SPIRAM);
+    if (!conversion_buffer) {
+        ESP_LOGE(TAG, "Failed to allocate conversion buffer in PSRAM");
+        return ESP_ERR_NO_MEM;
+    }
+    
+    // JPEG buffer (32KB)
+    jpeg_buffer = heap_caps_malloc(32768, MALLOC_CAP_SPIRAM);
+    if (!jpeg_buffer) {
+        ESP_LOGE(TAG, "Failed to allocate JPEG buffer in PSRAM");
+        free(conversion_buffer);
+        return ESP_ERR_NO_MEM;
+    }
+    
+    // Shared format buffer (maximum size for RGB888)
+    format_buffer = heap_caps_malloc(format_buffer_size, MALLOC_CAP_SPIRAM);
+    if (!format_buffer) {
+        ESP_LOGE(TAG, "Failed to allocate format buffer in PSRAM");
+        free(conversion_buffer);
+        free(jpeg_buffer);
+        return ESP_ERR_NO_MEM;
+    }
+    
+    ESP_LOGI(TAG, "Camera buffers allocated successfully: Conv=%dKB, JPEG=32KB, Format=%dKB", 
+             (CAMERA_WIDTH * CAMERA_HEIGHT) / 1024, format_buffer_size / 1024);
     
     // Load settings from NVS
     esp_err_t nvs_err = camera_settings_load_from_nvs();
@@ -373,13 +414,14 @@ esp_err_t camera_capture_frame(local_camera_fb_t **fb)
                 return ESP_OK;
             } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB565 && frame_buffer->format == PIXFORMAT_RGB565) {
                 // Stream RGB565 directly
-                size_t copy_len = (frame_buffer->len < sizeof(rgb565_buffer)) ? 
-                                frame_buffer->len : sizeof(rgb565_buffer);
-                memcpy(rgb565_buffer, frame_buffer->buf, copy_len);
+                size_t max_rgb565_size = CAMERA_WIDTH * CAMERA_HEIGHT * 2;
+                size_t copy_len = (frame_buffer->len < max_rgb565_size) ? 
+                                frame_buffer->len : max_rgb565_size;
+                memcpy(format_buffer, frame_buffer->buf, copy_len);
                 
                 esp_camera_fb_return(frame_buffer);
                 
-                converted_fb.buf = rgb565_buffer;
+                converted_fb.buf = format_buffer;
                 converted_fb.len = copy_len;
                 converted_fb.width = CAMERA_WIDTH;
                 converted_fb.height = CAMERA_HEIGHT;
@@ -390,13 +432,14 @@ esp_err_t camera_capture_frame(local_camera_fb_t **fb)
                 return ESP_OK;
             } else if (current_camera_pixformat == CAMERA_PIXFORMAT_YUV422 && frame_buffer->format == PIXFORMAT_YUV422) {
                 // Stream YUV422 directly
-                size_t copy_len = (frame_buffer->len < sizeof(yuv422_buffer)) ? 
-                                frame_buffer->len : sizeof(yuv422_buffer);
-                memcpy(yuv422_buffer, frame_buffer->buf, copy_len);
+                size_t max_yuv422_size = CAMERA_WIDTH * CAMERA_HEIGHT * 2;
+                size_t copy_len = (frame_buffer->len < max_yuv422_size) ? 
+                                frame_buffer->len : max_yuv422_size;
+                memcpy(format_buffer, frame_buffer->buf, copy_len);
                 
                 esp_camera_fb_return(frame_buffer);
                 
-                converted_fb.buf = yuv422_buffer;
+                converted_fb.buf = format_buffer;
                 converted_fb.len = copy_len;
                 converted_fb.width = CAMERA_WIDTH;
                 converted_fb.height = CAMERA_HEIGHT;
@@ -407,13 +450,14 @@ esp_err_t camera_capture_frame(local_camera_fb_t **fb)
                 return ESP_OK;
             } else if (current_camera_pixformat == CAMERA_PIXFORMAT_RGB888 && frame_buffer->format == PIXFORMAT_RGB888) {
                 // Stream RGB888 directly
-                size_t copy_len = (frame_buffer->len < sizeof(rgb888_buffer)) ? 
-                                frame_buffer->len : sizeof(rgb888_buffer);
-                memcpy(rgb888_buffer, frame_buffer->buf, copy_len);
+                size_t max_rgb888_size = CAMERA_WIDTH * CAMERA_HEIGHT * 3;
+                size_t copy_len = (frame_buffer->len < max_rgb888_size) ? 
+                                frame_buffer->len : max_rgb888_size;
+                memcpy(format_buffer, frame_buffer->buf, copy_len);
                 
                 esp_camera_fb_return(frame_buffer);
                 
-                converted_fb.buf = rgb888_buffer;
+                converted_fb.buf = format_buffer;
                 converted_fb.len = copy_len;
                 converted_fb.width = CAMERA_WIDTH;
                 converted_fb.height = CAMERA_HEIGHT;
@@ -438,7 +482,7 @@ esp_err_t camera_capture_frame(local_camera_fb_t **fb)
             converted_fb.height = CAMERA_HEIGHT;
             converted_fb.format = CAMERA_PIXFORMAT_MONO8;
             
-            *fb = (camera_fb_t*)&converted_fb;
+            *fb = (local_camera_fb_t*)&converted_fb;
             ESP_LOGI(TAG, "Frame captured and converted (real): %d bytes", converted_len);
             return ESP_OK;
         }
@@ -864,7 +908,6 @@ esp_err_t camera_settings_load_from_nvs(void)
 {
     nvs_handle_t nvs_handle;
     esp_err_t err;
-    size_t required_size;
     
     ESP_LOGI(TAG, "Loading camera settings from NVS");
     
