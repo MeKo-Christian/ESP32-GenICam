@@ -1,0 +1,80 @@
+#pragma once
+
+#include "gvcp_protocol.h"
+#include "esp_err.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+// Acquisition control registers (custom addresses beyond bootstrap region)
+#define GENICAM_ACQUISITION_START_OFFSET    0x00001000
+#define GENICAM_ACQUISITION_STOP_OFFSET     0x00001004
+#define GENICAM_ACQUISITION_MODE_OFFSET     0x00001008
+
+// Image format control registers
+#define GENICAM_PIXEL_FORMAT_OFFSET         0x0000100C
+#define GENICAM_JPEG_QUALITY_OFFSET         0x00001024
+
+// Camera control registers (matching GenICam XML)
+#define GENICAM_EXPOSURE_TIME_OFFSET        0x00001030
+#define GENICAM_GAIN_OFFSET                 0x00001034
+#define GENICAM_BRIGHTNESS_OFFSET           0x00001038
+#define GENICAM_CONTRAST_OFFSET             0x0000103C
+#define GENICAM_SATURATION_OFFSET           0x00001040
+#define GENICAM_WHITE_BALANCE_MODE_OFFSET   0x00001044
+#define GENICAM_TRIGGER_MODE_OFFSET         0x00001048
+
+// Stream control registers
+#define GENICAM_PACKET_DELAY_OFFSET         0x00001010
+#define GENICAM_FRAME_RATE_OFFSET           0x00001014
+#define GENICAM_PACKET_SIZE_OFFSET          0x00001018
+#define GENICAM_STREAM_STATUS_OFFSET        0x0000101C
+#define GENICAM_PAYLOAD_SIZE_OFFSET         0x00001020
+
+// Diagnostic and statistics registers (moved to avoid collision)
+#define GENICAM_TOTAL_COMMANDS_OFFSET       0x00001070
+#define GENICAM_TOTAL_ERRORS_OFFSET         0x00001074
+#define GENICAM_UNKNOWN_COMMANDS_OFFSET     0x00001078
+#define GENICAM_PACKETS_SENT_OFFSET         0x0000107C
+#define GENICAM_PACKET_ERRORS_OFFSET        0x00001080
+#define GENICAM_FRAMES_SENT_OFFSET          0x00001084
+#define GENICAM_FRAME_ERRORS_OFFSET         0x00001088
+#define GENICAM_CONNECTION_STATUS_OFFSET    0x0000108C
+
+// Frame sequence tracking registers
+#define GENICAM_OUT_OF_ORDER_FRAMES_OFFSET  0x00001090
+#define GENICAM_LOST_FRAMES_OFFSET          0x00001094
+#define GENICAM_DUPLICATE_FRAMES_OFFSET     0x00001098
+#define GENICAM_EXPECTED_SEQUENCE_OFFSET    0x0000109C
+#define GENICAM_LAST_SEQUENCE_OFFSET        0x000010A0
+#define GENICAM_FRAMES_IN_RING_OFFSET       0x000010A4
+#define GENICAM_CONNECTION_FAILURES_OFFSET  0x000010A8
+#define GENICAM_RECOVERY_MODE_OFFSET        0x000010AC
+
+// Discovery broadcast control registers
+#define GENICAM_DISCOVERY_BROADCAST_ENABLE_OFFSET    0x000010B0
+#define GENICAM_DISCOVERY_BROADCAST_INTERVAL_OFFSET  0x000010B4
+#define GENICAM_DISCOVERY_BROADCASTS_SENT_OFFSET     0x000010B8
+#define GENICAM_DISCOVERY_BROADCAST_FAILURES_OFFSET  0x000010BC
+#define GENICAM_DISCOVERY_BROADCAST_SEQUENCE_OFFSET  0x000010C0
+
+// Register access command handlers
+void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+
+// Register validation and utility functions
+bool is_register_address_valid(uint32_t address);
+bool is_register_address_writable(uint32_t address);
+bool is_bootstrap_register(uint32_t address);
+bool is_genicam_register(uint32_t address);
+
+// Stream configuration getter functions
+uint32_t gvcp_get_packet_delay_us(void);
+uint32_t gvcp_get_frame_rate_fps(void);
+uint32_t gvcp_get_packet_size(void);
+void gvcp_set_stream_status(uint32_t status);
+
+// Register access initialization
+esp_err_t gvcp_registers_init(void);

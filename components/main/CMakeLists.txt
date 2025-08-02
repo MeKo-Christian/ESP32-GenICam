@@ -2,6 +2,11 @@
 set(COMPONENT_SRCS 
     "main.c"
     "gvcp_handler.c"
+    "gvcp_protocol.c"
+    "gvcp_discovery.c"
+    "gvcp_bootstrap.c"
+    "gvcp_registers.c"
+    "gvcp_statistics.c"
     "gvsp_handler.c"
     "camera_handler.c" 
     "wifi_manager.c"

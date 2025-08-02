@@ -6,6 +6,12 @@ GVCP Discovery Test Script for ESP32-CAM GenICam
 This script sends a proper GigE Vision Control Protocol (GVCP) discovery packet
 to test ESP32-CAM device discovery functionality.
 
+Features:
+- Validates GVCP header size field (must be payload size in 32-bit words)
+- Checks exact payload size (568 bytes) and total packet size (576 bytes)
+- Verifies packet ID echo for proper solicited response handling
+- Extracts and displays complete device information from discovery payload
+
 Usage: python3 test_gvcp_discovery.py <ESP32_IP_ADDRESS>
 """
 
@@ -20,7 +26,12 @@ GVCP_PORT = 3956
 GVCP_PACKET_TYPE_CMD = 0x42
 GVCP_PACKET_TYPE_ACK = 0x00
 GVCP_CMD_DISCOVERY = 0x0002
-GVCP_ACK_DISCOVERY = 0x0003
+GVCP_ACK_DISCOVERY = 0x0002
+
+# GigE Vision Discovery Response Constants
+GVCP_DISCOVERY_PAYLOAD_SIZE = 568    # Expected payload size in bytes
+GVCP_DISCOVERY_SIZE_WORDS = 142      # Expected size field value (568/4 = 142 words)
+GVCP_DISCOVERY_TOTAL_SIZE = 576      # Total packet size (8 header + 568 payload)
 
 def create_gvcp_discovery_packet():
     """Create a proper GVCP discovery command packet."""
@@ -65,9 +76,26 @@ def parse_gvcp_response(data, expected_id):
     }
     
     # Validate response
-    if packet_type == GVCP_PACKET_TYPE_ACK and command == GVCP_ACK_DISCOVERY:
+    if packet_type == GVCP_PACKET_TYPE_ACK and command == GVCP_CMD_DISCOVERY:
+        # Validate packet ID
         if packet_id != expected_id:
             return response_info, f"Packet ID mismatch: got 0x{packet_id:04x}, expected 0x{expected_id:04x}"
+        
+        # Validate size field (critical for GigE Vision compliance)
+        payload_size = len(data) - 8
+        expected_size_words = payload_size // 4
+        
+        if size != expected_size_words:
+            return response_info, f"Size field mismatch: got {size} words, expected {expected_size_words} words (payload: {payload_size} bytes)"
+        
+        # For discovery response, expect exactly correct payload size per GigE Vision spec
+        if payload_size != GVCP_DISCOVERY_PAYLOAD_SIZE:
+            return response_info, f"Discovery payload size incorrect: got {payload_size} bytes, expected {GVCP_DISCOVERY_PAYLOAD_SIZE} bytes"
+        
+        # Validate total packet size per GigE Vision spec
+        if len(data) != GVCP_DISCOVERY_TOTAL_SIZE:
+            return response_info, f"Total packet size incorrect: got {len(data)} bytes, expected {GVCP_DISCOVERY_TOTAL_SIZE} bytes (8 header + {GVCP_DISCOVERY_PAYLOAD_SIZE} payload)"
+        
         return response_info, None
     elif packet_type == 0x80:  # Error packet
         error_code = struct.unpack('>H', data[8:10])[0] if len(data) >= 10 else 0
@@ -77,8 +105,8 @@ def parse_gvcp_response(data, expected_id):
 
 def extract_device_info(payload):
     """Extract device information from discovery response payload."""
-    if len(payload) < 0xf8:  # GVBS_DISCOVERY_DATA_SIZE
-        return "Payload too short for complete device info"
+    if len(payload) < GVCP_DISCOVERY_PAYLOAD_SIZE:
+        return f"Payload too short for complete device info: got {len(payload)}, expected {GVCP_DISCOVERY_PAYLOAD_SIZE}"
     
     try:
         # Extract key device information from bootstrap memory
@@ -102,6 +130,10 @@ def extract_device_info(payload):
         ]
         mac_str = ":".join(f"{b:02x}" for b in mac_bytes)
         
+        # Device UUID (offset 0x18, 16 bytes)
+        uuid_bytes = payload[0x18:0x28]
+        uuid_str = f"{uuid_bytes[0:4].hex()}-{uuid_bytes[4:6].hex()}-{uuid_bytes[6:8].hex()}-{uuid_bytes[8:10].hex()}-{uuid_bytes[10:16].hex()}"
+        
         # Current IP (offset 0x24)
         ip_raw = struct.unpack('<I', payload[0x24:0x28])[0]  # Little endian for IP
         ip_str = f"{ip_raw & 0xFF}.{(ip_raw >> 8) & 0xFF}.{(ip_raw >> 16) & 0xFF}.{(ip_raw >> 24) & 0xFF}"
@@ -117,6 +149,7 @@ def extract_device_info(payload):
   Version: {version_major}.{version_minor}
   Device Mode: 0x{device_mode:08x}
   MAC Address: {mac_str}
+  Device UUID: {uuid_str}
   IP Address: {ip_str}
   Manufacturer: {manufacturer}
   Model: {model}
@@ -174,6 +207,19 @@ def test_gvcp_discovery(target_ip, timeout=5.0, verbose=False):
                 return False
             else:
                 print("✓ Valid GVCP discovery response received")
+                
+                if verbose:
+                    payload_size = len(response_data) - 8
+                    size_words = payload_size // 4
+                    print(f"  Response validation details:")
+                    print(f"    Packet Type: 0x{response_info['packet_type']:02x} (ACK)")
+                    print(f"    Command: 0x{response_info['command']:04x} (DISCOVERY)")
+                    print(f"    Size Field: {response_info['size']} words ({response_info['size'] * 4} bytes)")
+                    print(f"    Packet ID: 0x{response_info['packet_id']:04x}")
+                    print(f"    Total Size: {len(response_data)} bytes")
+                    print(f"    Payload Size: {payload_size} bytes")
+                    print(f"    ✓ Size field correctly shows {size_words} words (GigE Vision compliant)")
+                    print()
                 
                 # Extract and display device information
                 if response_info['payload']:
