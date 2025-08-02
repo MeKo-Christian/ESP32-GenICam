@@ -496,6 +496,12 @@ void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, s
         // Acquisition mode
         acquisition_mode = ntohl(*(uint32_t*)write_data);
         ESP_LOGI(TAG, "Acquisition mode set to: %d", acquisition_mode);
+    } else if (address == GVBS_CONTROL_CHANNEL_PRIVILEGE_OFFSET && size >= 4) {
+        uint32_t requested_priv = ntohl(*(uint32_t*)write_data);
+
+        // Accept any value the client writes (typically 0 for "request control")
+        ESP_LOGI(TAG, "Control Channel Privilege register written: 0x%08X", requested_priv);
+        gvcp_set_control_channel_privilege(requested_priv);
     } else if (address == GENICAM_PIXEL_FORMAT_OFFSET && size >= 4) {
         // Pixel format
         uint32_t format_value = ntohl(*(uint32_t*)write_data);

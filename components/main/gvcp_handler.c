@@ -24,14 +24,6 @@
 static const char *TAG = "gvcp_handler";
 
 int sock = -1; // Made non-static for module access
-// Bootstrap memory needs to be large enough to hold XML URL at offset 0x220 + URL size
-#define BOOTSTRAP_MEMORY_SIZE 0x320
-static uint8_t bootstrap_memory[BOOTSTRAP_MEMORY_SIZE];
-
-// Forward declarations - functions moved to modules
-
-// Core handler statistics (moved to gvcp_statistics.c)
-static uint32_t total_commands_received = 0;
 
 // Device information constants
 #define DEVICE_MANUFACTURER "ESP32GenICam"
@@ -39,10 +31,6 @@ static uint32_t total_commands_received = 0;
 #define DEVICE_VERSION "1.0.0"
 #define DEVICE_SERIAL "ESP32CAM001"
 #define DEVICE_USER_NAME "ESP32Camera"
-#define XML_URL "Local:0x10000;0x2000;"
-
-// XML memory mapping
-#define XML_BASE_ADDRESS 0x10000
 
 // Connection status (bit field) - minimal for socket management
 // Bit 0: GVCP socket active
@@ -117,8 +105,6 @@ esp_err_t gvcp_init(void)
 
     return ESP_OK;
 }
-
-// gvcp_sendto function moved to gvcp_protocol.c
 
 void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *client_addr)
 {
@@ -233,6 +219,3 @@ void gvcp_task(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
-
-// Getter functions for statistics and parameters - moved to respective modules
-// Functions now implemented in gvcp_statistics.c, gvcp_registers.c, and gvcp_bootstrap.c
