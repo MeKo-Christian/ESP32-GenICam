@@ -8,17 +8,18 @@
 
 #define CAMERA_WIDTH 320
 #define CAMERA_HEIGHT 240
-#define CAMERA_PIXFORMAT_MONO8 2    // Grayscale format 
-#define CAMERA_PIXFORMAT_JPEG 7     // JPEG format
-#define CAMERA_PIXFORMAT_RGB565 3   // RGB565 format
-#define CAMERA_PIXFORMAT_YUV422 4   // YUV422 format
-#define CAMERA_PIXFORMAT_RGB888 5   // RGB888 format
+#define CAMERA_PIXFORMAT_MONO8 2  // Grayscale format
+#define CAMERA_PIXFORMAT_JPEG 7   // JPEG format
+#define CAMERA_PIXFORMAT_RGB565 3 // RGB565 format
+#define CAMERA_PIXFORMAT_YUV422 4 // YUV422 format
+#define CAMERA_PIXFORMAT_RGB888 5 // RGB888 format
 
 // Current pixel format (runtime configurable)
 extern int current_camera_pixformat;
 
 // Simple frame buffer structure
-typedef struct {
+typedef struct
+{
     uint8_t *buf;
     size_t len;
     size_t width;

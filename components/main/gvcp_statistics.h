@@ -27,13 +27,13 @@ void gvcp_update_socket_recreation_time(void);
 
 // Connection status bit definitions
 // Bit 0: GVCP socket active
-// Bit 1: GVSP socket active  
+// Bit 1: GVSP socket active
 // Bit 2: Client connected
 // Bit 3: Streaming active
-#define GVCP_CONNECTION_STATUS_GVCP_SOCKET     0
-#define GVCP_CONNECTION_STATUS_GVSP_SOCKET     1
-#define GVCP_CONNECTION_STATUS_CLIENT_CONN     2
-#define GVCP_CONNECTION_STATUS_STREAMING       3
+#define GVCP_CONNECTION_STATUS_GVCP_SOCKET 0
+#define GVCP_CONNECTION_STATUS_GVSP_SOCKET 1
+#define GVCP_CONNECTION_STATUS_CLIENT_CONN 2
+#define GVCP_CONNECTION_STATUS_STREAMING 3
 
 // Statistics initialization
 esp_err_t gvcp_statistics_init(void);

@@ -16,7 +16,7 @@ static uint32_t gvcp_socket_recreation_interval_ms = 15000; // Min 15s between r
 
 // Connection status (bit field)
 // Bit 0: GVCP socket active
-// Bit 1: GVSP socket active  
+// Bit 1: GVSP socket active
 // Bit 2: Client connected
 // Bit 3: Streaming active
 static uint32_t connection_status = 0;
@@ -56,13 +56,17 @@ void gvcp_increment_unknown_commands(void)
 // Connection status management
 void gvcp_set_connection_status_bit(uint8_t bit_position, bool value)
 {
-    if (bit_position < 32) {
-        if (value) {
+    if (bit_position < 32)
+    {
+        if (value)
+        {
             connection_status |= (1U << bit_position);
-        } else {
+        }
+        else
+        {
             connection_status &= ~(1U << bit_position);
         }
-        ESP_LOGD(TAG, "Connection status bit %d set to %d, status: 0x%08x", 
+        ESP_LOGD(TAG, "Connection status bit %d set to %d, status: 0x%08x",
                  bit_position, value ? 1 : 0, connection_status);
     }
 }
@@ -86,7 +90,8 @@ void gvcp_increment_socket_error_count(void)
 
 void gvcp_reset_socket_error_count(void)
 {
-    if (gvcp_socket_error_count > 0) {
+    if (gvcp_socket_error_count > 0)
+    {
         ESP_LOGD(TAG, "Socket error count reset from %d to 0", gvcp_socket_error_count);
         gvcp_socket_error_count = 0;
     }
@@ -94,9 +99,11 @@ void gvcp_reset_socket_error_count(void)
 
 bool gvcp_should_recreate_socket(void)
 {
-    if (gvcp_socket_error_count >= gvcp_max_socket_errors) {
+    if (gvcp_socket_error_count >= gvcp_max_socket_errors)
+    {
         uint32_t current_time = esp_log_timestamp();
-        if (current_time - gvcp_last_socket_recreation >= gvcp_socket_recreation_interval_ms) {
+        if (current_time - gvcp_last_socket_recreation >= gvcp_socket_recreation_interval_ms)
+        {
             return true;
         }
     }
@@ -120,7 +127,7 @@ esp_err_t gvcp_statistics_init(void)
     gvcp_socket_error_count = 0;
     gvcp_last_socket_recreation = 0;
     connection_status = 0;
-    
+
     ESP_LOGI(TAG, "Statistics module initialized");
     return ESP_OK;
 }
@@ -132,6 +139,6 @@ void gvcp_statistics_reset(void)
     total_unknown_commands = 0;
     gvcp_socket_error_count = 0;
     gvcp_last_socket_recreation = 0;
-    
+
     ESP_LOGI(TAG, "Statistics reset");
 }

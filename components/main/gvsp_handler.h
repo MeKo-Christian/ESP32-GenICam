@@ -12,30 +12,32 @@
 #define GVSP_DATA_PACKET_SIZE 1400
 
 // GVSP Protocol Constants
-#define GVSP_PACKET_TYPE_DATA        0x00
-#define GVSP_PACKET_TYPE_LEADER      0x01
-#define GVSP_PACKET_TYPE_TRAILER     0x02
+#define GVSP_PACKET_TYPE_DATA 0x00
+#define GVSP_PACKET_TYPE_LEADER 0x01
+#define GVSP_PACKET_TYPE_TRAILER 0x02
 
 // GVSP Status flags
-#define GVSP_STATUS_SUCCESS          0x0000
+#define GVSP_STATUS_SUCCESS 0x0000
 
 // Pixel format codes (GenICam PFNC standard values)
-#define GVSP_PIXEL_MONO8             0x01080001  // Mono8
-#define GVSP_PIXEL_RGB565            0x02100005  // RGB565Packed  
-#define GVSP_PIXEL_YUV422            0x02100004  // YUV422Packed
-#define GVSP_PIXEL_RGB888            0x02180014  // RGB8Packed
-#define GVSP_PIXEL_JPEG              0x80000001  // JPEG
+#define GVSP_PIXEL_MONO8 0x01080001  // Mono8
+#define GVSP_PIXEL_RGB565 0x02100005 // RGB565Packed
+#define GVSP_PIXEL_YUV422 0x02100004 // YUV422Packed
+#define GVSP_PIXEL_RGB888 0x02180014 // RGB8Packed
+#define GVSP_PIXEL_JPEG 0x80000001   // JPEG
 
 // GVSP packet header structure
-typedef struct __attribute__((packed)) {
+typedef struct __attribute__((packed))
+{
     uint8_t packet_type;
     uint8_t flags;
     uint16_t packet_id;
-    uint32_t data[2];  // Format-specific data
+    uint32_t data[2]; // Format-specific data
 } gvsp_header_t;
 
 // GVSP Leader packet data
-typedef struct __attribute__((packed)) {
+typedef struct __attribute__((packed))
+{
     uint16_t flags;
     uint16_t payload_type;
     uint32_t timestamp_high;
@@ -50,7 +52,8 @@ typedef struct __attribute__((packed)) {
 } gvsp_leader_data_t;
 
 // GVSP Trailer packet data
-typedef struct __attribute__((packed)) {
+typedef struct __attribute__((packed))
+{
     uint16_t reserved;
     uint16_t payload_type;
     uint32_t size_y;
