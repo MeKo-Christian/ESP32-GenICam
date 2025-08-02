@@ -127,6 +127,11 @@ test-discovery-verbose ip:
     @echo "Testing GVCP discovery on {{ip}}:3956 (verbose mode)..."
     @python3 scripts/test_gvcp_discovery.py {{ip}} --verbose || echo "❌ GVCP discovery test failed"
 
+# Analyze ESP32-CAM discovery response for Aravis compatibility
+analyze-discovery ip:
+    @echo "Analyzing ESP32-CAM discovery response from {{ip}}..."
+    @python3 scripts/analyze_discovery_response.py {{ip}} || echo "❌ Discovery analysis failed"
+
 # Test with Aravis discovery tools
 aravis-test:
     @echo "Testing with Aravis tools..."

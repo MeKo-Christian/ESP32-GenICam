@@ -40,13 +40,22 @@ static uint32_t gvcp_max_socket_errors = 3;
 static uint32_t gvcp_last_socket_recreation = 0;
 static uint32_t gvcp_socket_recreation_interval_ms = 15000; // Min 15s between recreations
 
+// Discovery broadcast configuration
+static bool discovery_broadcast_enabled = true;
+static uint32_t discovery_broadcast_interval_ms = 3000; // 3 seconds as per GigE Vision standard
+static uint32_t last_discovery_broadcast_time = 0;
+static uint32_t discovery_broadcast_sequence = 0;
+static uint32_t discovery_broadcast_retries = 3; // Number of retries for broadcast
+static uint32_t discovery_broadcasts_sent = 0;
+static uint32_t discovery_broadcast_failures = 0;
+
 // Device information constants
 #define DEVICE_MANUFACTURER "ESP32GenICam"
 #define DEVICE_MODEL "ESP32-CAM-GigE"
 #define DEVICE_VERSION "1.0.0"
 #define DEVICE_SERIAL "ESP32CAM001"
 #define DEVICE_USER_NAME "ESP32Camera"
-#define XML_URL "Local:0x10000;0x2000;0x10000"
+#define XML_URL "Local:0x10000;0x2000"
 
 // XML memory mapping
 #define XML_BASE_ADDRESS 0x10000
@@ -91,22 +100,38 @@ static void init_bootstrap_memory(void)
         memcpy(&bootstrap_memory[GVBS_DEVICE_MAC_ADDRESS_LOW_OFFSET], &mac_low, 4);
     }
     
-    // Get current IP address
+    // Get current IP address and network configuration
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif) {
         esp_netif_ip_info_t ip_info;
         if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
             uint32_t ip = ip_info.ip.addr;
+            uint32_t netmask = ip_info.netmask.addr;
+            uint32_t gateway = ip_info.gw.addr;
+            
             memcpy(&bootstrap_memory[GVBS_CURRENT_IP_ADDRESS_OFFSET], &ip, 4);
+            memcpy(&bootstrap_memory[GVBS_CURRENT_SUBNET_MASK_OFFSET], &netmask, 4);
+            memcpy(&bootstrap_memory[GVBS_CURRENT_DEFAULT_GATEWAY_OFFSET], &gateway, 4);
+            
+            // Supported IP configuration register (static IP, DHCP, etc.)
+            // Bit 0: Manual IP, Bit 1: DHCP, Bit 2: AutoIP
+            uint32_t supported_ip_config = htonl(0x00000002); // DHCP supported
+            memcpy(&bootstrap_memory[GVBS_SUPPORTED_IP_CONFIG_OFFSET], &supported_ip_config, 4);
         }
     }
     
-    // Device strings
-    strncpy((char*)&bootstrap_memory[GVBS_MANUFACTURER_NAME_OFFSET], DEVICE_MANUFACTURER, 32);
-    strncpy((char*)&bootstrap_memory[GVBS_MODEL_NAME_OFFSET], DEVICE_MODEL, 32);
-    strncpy((char*)&bootstrap_memory[GVBS_DEVICE_VERSION_OFFSET], DEVICE_VERSION, 32);
-    strncpy((char*)&bootstrap_memory[GVBS_SERIAL_NUMBER_OFFSET], DEVICE_SERIAL, 16);
-    strncpy((char*)&bootstrap_memory[GVBS_USER_DEFINED_NAME_OFFSET], DEVICE_USER_NAME, 16);
+    // Device strings (ensure proper null termination)
+    memset(&bootstrap_memory[GVBS_MANUFACTURER_NAME_OFFSET], 0, 32);
+    memset(&bootstrap_memory[GVBS_MODEL_NAME_OFFSET], 0, 32);
+    memset(&bootstrap_memory[GVBS_DEVICE_VERSION_OFFSET], 0, 32);
+    memset(&bootstrap_memory[GVBS_SERIAL_NUMBER_OFFSET], 0, 16);
+    memset(&bootstrap_memory[GVBS_USER_DEFINED_NAME_OFFSET], 0, 16);
+    
+    strncpy((char*)&bootstrap_memory[GVBS_MANUFACTURER_NAME_OFFSET], DEVICE_MANUFACTURER, 31);
+    strncpy((char*)&bootstrap_memory[GVBS_MODEL_NAME_OFFSET], DEVICE_MODEL, 31);
+    strncpy((char*)&bootstrap_memory[GVBS_DEVICE_VERSION_OFFSET], DEVICE_VERSION, 31);
+    strncpy((char*)&bootstrap_memory[GVBS_SERIAL_NUMBER_OFFSET], DEVICE_SERIAL, 15);
+    strncpy((char*)&bootstrap_memory[GVBS_USER_DEFINED_NAME_OFFSET], DEVICE_USER_NAME, 15);
     
     // XML URL (safe size: BOOTSTRAP_MEMORY_SIZE - GVBS_XML_URL_0_OFFSET)
     size_t xml_url_max_size = BOOTSTRAP_MEMORY_SIZE - GVBS_XML_URL_0_OFFSET;
@@ -172,10 +197,10 @@ esp_err_t gvcp_init(void)
         return ESP_FAIL;
     }
 
-    // Set socket receive timeout to prevent watchdog timeout
+    // Set socket receive timeout to allow responsive broadcasts
     struct timeval timeout;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 500000; // 500ms for responsive broadcast timing
     if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
         ESP_LOGE(TAG, "Failed to set socket receive timeout");
         close(sock);
@@ -192,6 +217,13 @@ esp_err_t gvcp_init(void)
 
     // Set GVCP socket active bit
     connection_status |= 0x01;
+
+    // Send initial discovery broadcast to announce presence
+    ESP_LOGI(TAG, "GVCP initialized, sending initial discovery broadcast");
+    esp_err_t broadcast_result = gvcp_trigger_discovery_broadcast();
+    if (broadcast_result != ESP_OK) {
+        ESP_LOGW(TAG, "Initial discovery broadcast failed, will retry in periodic cycle");
+    }
 
     return ESP_OK;
 }
@@ -237,10 +269,10 @@ static esp_err_t gvcp_recreate_socket(void)
         return ESP_FAIL;
     }
 
-    // Set socket receive timeout to prevent watchdog timeout
+    // Set socket receive timeout to allow responsive broadcasts
     struct timeval timeout;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 500000; // 500ms for responsive broadcast timing
     if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
         ESP_LOGE(TAG, "Failed to set socket receive timeout after recreation");
         close(sock);
@@ -306,10 +338,8 @@ static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_
     }
 }
 
-static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in *client_addr)
+static esp_err_t send_discovery_response(const gvcp_header_t *request_header, struct sockaddr_in *dest_addr, bool is_broadcast)
 {
-    ESP_LOGI(TAG, "Handling GVCP Discovery Command");
-    
     // Create discovery ACK response
     uint8_t response[sizeof(gvcp_header_t) + GVBS_DISCOVERY_DATA_SIZE];
     gvcp_header_t *ack_header = (gvcp_header_t*)response;
@@ -318,24 +348,101 @@ static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in
     ack_header->packet_flags = 0;
     ack_header->command = htons(GVCP_ACK_DISCOVERY);
     ack_header->size = htons(GVBS_DISCOVERY_DATA_SIZE);
-    ack_header->id = header->id; // Echo back the packet ID
+    
+    if (request_header != NULL) {
+        // Solicited response - echo back the packet ID
+        ack_header->id = request_header->id;
+    } else {
+        // Unsolicited broadcast - use sequence number
+        ack_header->id = htons(discovery_broadcast_sequence & 0xFFFF);
+    }
     
     // Copy bootstrap data
     memcpy(&response[sizeof(gvcp_header_t)], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
     
     // Send response
-    esp_err_t err = gvcp_sendto(response, sizeof(response), client_addr);
+    esp_err_t err = gvcp_sendto(response, sizeof(response), dest_addr);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Error sending discovery ACK");
+        if (is_broadcast) {
+            ESP_LOGW(TAG, "Error sending discovery broadcast");
+        } else {
+            ESP_LOGE(TAG, "Error sending discovery ACK");
+        }
+        return err;
     } else {
-        ESP_LOGI(TAG, "Sent discovery ACK (%d bytes)", sizeof(response));
-        
-        // Set GVSP client address for streaming
-        gvsp_set_client_address(client_addr);
-        
-        // Set client connected bit
-        connection_status |= 0x04;
+        if (is_broadcast) {
+            ESP_LOGD(TAG, "Sent discovery broadcast #%d (%d bytes)", discovery_broadcast_sequence, sizeof(response));
+        } else {
+            ESP_LOGI(TAG, "Sent discovery ACK (%d bytes)", sizeof(response));
+            
+            // Set GVSP client address for streaming (only for solicited responses)
+            gvsp_set_client_address(dest_addr);
+            
+            // Set client connected bit
+            connection_status |= 0x04;
+        }
+        return ESP_OK;
     }
+}
+
+static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in *client_addr)
+{
+    ESP_LOGI(TAG, "Handling GVCP Discovery Command");
+    send_discovery_response(header, client_addr, false);
+}
+
+static esp_err_t send_discovery_broadcast(void)
+{
+    if (!discovery_broadcast_enabled) {
+        return ESP_OK;
+    }
+    
+    // Get current IP and calculate network broadcast address
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip_info;
+    uint32_t broadcast_ip = htonl(INADDR_BROADCAST); // Default fallback
+    
+    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+        // Calculate network broadcast address: IP | (~netmask)
+        uint32_t ip = ip_info.ip.addr;
+        uint32_t netmask = ip_info.netmask.addr;
+        broadcast_ip = ip | (~netmask);
+        
+        char ip_str[16], broadcast_str[16];
+        esp_ip4addr_ntoa((esp_ip4_addr_t*)&ip, ip_str, sizeof(ip_str));
+        esp_ip4addr_ntoa((esp_ip4_addr_t*)&broadcast_ip, broadcast_str, sizeof(broadcast_str));
+        ESP_LOGD(TAG, "Calculated broadcast address: %s (from IP: %s)", broadcast_str, ip_str);
+    }
+    
+    struct sockaddr_in broadcast_addr;
+    memset(&broadcast_addr, 0, sizeof(broadcast_addr));
+    broadcast_addr.sin_family = AF_INET;
+    broadcast_addr.sin_port = htons(GVCP_PORT);
+    broadcast_addr.sin_addr.s_addr = broadcast_ip;
+    
+    discovery_broadcast_sequence++;
+    
+    // Try broadcast with retries for reliability
+    esp_err_t result = ESP_FAIL;
+    for (uint32_t retry = 0; retry < discovery_broadcast_retries; retry++) {
+        result = send_discovery_response(NULL, &broadcast_addr, true);
+        if (result == ESP_OK) {
+            discovery_broadcasts_sent++;
+            break;
+        } else {
+            ESP_LOGW(TAG, "Discovery broadcast attempt %d/%d failed", retry + 1, discovery_broadcast_retries);
+            if (retry < discovery_broadcast_retries - 1) {
+                vTaskDelay(pdMS_TO_TICKS(50)); // 50ms delay between retries
+            }
+        }
+    }
+    
+    if (result != ESP_OK) {
+        discovery_broadcast_failures++;
+        ESP_LOGE(TAG, "All discovery broadcast attempts failed for sequence #%d", discovery_broadcast_sequence);
+    }
+    
+    return result;
 }
 
 static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr)
@@ -366,9 +473,11 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         return;
     }
     
-    if (size > 512) {
-        ESP_LOGW(TAG, "Read size %d exceeds maximum, clamping to 512", size);
-        size = 512;
+    // Allow larger reads for XML content at address 0x10000
+    uint32_t max_read_size = (address == 0x10000) ? 8192 : 512;
+    if (size > max_read_size) {
+        ESP_LOGW(TAG, "Read size %d exceeds maximum %d, clamping", size, max_read_size);
+        size = max_read_size;
     }
     
     // Address alignment check for certain registers (4-byte aligned for 32-bit registers)
@@ -380,8 +489,22 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         return;
     }
     
-    // Create read memory ACK response
-    uint8_t response[sizeof(gvcp_header_t) + 4 + size];
+    // Create read memory ACK response - use dynamic allocation for large XML reads
+    uint8_t *response;
+    bool use_heap = (size > 512);
+    
+    if (use_heap) {
+        response = malloc(sizeof(gvcp_header_t) + 4 + size);
+        if (response == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate %d bytes for read memory response", sizeof(gvcp_header_t) + 4 + size);
+            gvcp_send_nack(header, GVCP_ERROR_BUSY, client_addr);
+            return;
+        }
+    } else {
+        uint8_t stack_response[sizeof(gvcp_header_t) + 4 + 512];
+        response = stack_response;
+    }
+    
     gvcp_header_t *ack_header = (gvcp_header_t*)response;
     
     ack_header->packet_type = GVCP_PACKET_TYPE_ACK;
@@ -647,20 +770,61 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         if (size > 4) {
             memset(data_ptr + 4, 0, size - 4);
         }
+    } else if (address == GENICAM_DISCOVERY_BROADCAST_ENABLE_OFFSET && size >= 4) {
+        // Discovery broadcast enable register (0 = disabled, 1 = enabled)
+        uint32_t reg_value = htonl(discovery_broadcast_enabled ? 1 : 0);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_DISCOVERY_BROADCAST_INTERVAL_OFFSET && size >= 4) {
+        // Discovery broadcast interval register (milliseconds)
+        uint32_t reg_value = htonl(discovery_broadcast_interval_ms);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_DISCOVERY_BROADCASTS_SENT_OFFSET && size >= 4) {
+        // Discovery broadcasts sent register
+        uint32_t reg_value = htonl(discovery_broadcasts_sent);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_DISCOVERY_BROADCAST_FAILURES_OFFSET && size >= 4) {
+        // Discovery broadcast failures register
+        uint32_t reg_value = htonl(discovery_broadcast_failures);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
+    } else if (address == GENICAM_DISCOVERY_BROADCAST_SEQUENCE_OFFSET && size >= 4) {
+        // Discovery broadcast sequence register
+        uint32_t reg_value = htonl(discovery_broadcast_sequence);
+        memcpy(data_ptr, &reg_value, 4);
+        if (size > 4) {
+            memset(data_ptr + 4, 0, size - 4);
+        }
     } else {
         // Unknown memory region - return zeros
         memset(data_ptr, 0, size);
     }
     
     // Send response
-    esp_err_t err = gvcp_sendto(response, sizeof(gvcp_header_t) + 4 + size, client_addr);
+    size_t response_size = sizeof(gvcp_header_t) + 4 + size;
+    esp_err_t err = gvcp_sendto(response, response_size, client_addr);
+    
+    // Cleanup heap allocation if used
+    if (use_heap) {
+        free(response);
+    }
     
     // Update client activity
     gvsp_update_client_activity();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error sending read memory ACK");
     } else {
-        ESP_LOGI(TAG, "Sent read memory ACK (%d bytes)", sizeof(gvcp_header_t) + 4 + size);
+        ESP_LOGI(TAG, "Sent read memory ACK (%d bytes)", response_size);
     }
 }
 
@@ -876,6 +1040,17 @@ static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
         }
+    } else if (address == GENICAM_DISCOVERY_BROADCAST_ENABLE_OFFSET && size >= 4) {
+        // Discovery broadcast enable/disable
+        uint32_t enable_value = ntohl(*(uint32_t*)write_data);
+        bool enable = (enable_value != 0);
+        gvcp_enable_discovery_broadcast(enable);
+        ESP_LOGI(TAG, "Discovery broadcast %s", enable ? "enabled" : "disabled");
+    } else if (address == GENICAM_DISCOVERY_BROADCAST_INTERVAL_OFFSET && size >= 4) {
+        // Discovery broadcast interval
+        uint32_t interval_value = ntohl(*(uint32_t*)write_data);
+        gvcp_set_discovery_broadcast_interval(interval_value);
+        ESP_LOGI(TAG, "Discovery broadcast interval set to %d ms", interval_value);
     } else {
         ESP_LOGW(TAG, "Write denied to address 0x%08x (read-only or out of range)", address);
         gvcp_send_nack(header, GVCP_ERROR_INVALID_ADDRESS, client_addr);
@@ -980,6 +1155,22 @@ void gvcp_task(void *pvParameters)
     while (1) {
         // Feed the watchdog 
         esp_task_wdt_reset();
+        
+        // Check if it's time to send discovery broadcast
+        uint32_t current_time = esp_log_timestamp();
+        if (discovery_broadcast_enabled && sock >= 0 &&
+            (current_time - last_discovery_broadcast_time >= discovery_broadcast_interval_ms)) {
+            
+            ESP_LOGI(TAG, "Sending periodic discovery broadcast (sequence #%d)", discovery_broadcast_sequence + 1);
+            esp_err_t broadcast_result = send_discovery_broadcast();
+            if (broadcast_result == ESP_OK) {
+                last_discovery_broadcast_time = current_time;
+                ESP_LOGI(TAG, "Discovery broadcast sent successfully");
+            } else {
+                ESP_LOGW(TAG, "Discovery broadcast failed, will retry next interval");
+            }
+        }
+        
         struct sockaddr_in source_addr;
         socklen_t socklen = sizeof(source_addr);
         
@@ -1090,4 +1281,57 @@ void gvcp_set_connection_status_bit(uint8_t bit_position, bool value)
 uint32_t gvcp_get_connection_status(void)
 {
     return connection_status;
+}
+
+// Discovery broadcast management functions
+void gvcp_enable_discovery_broadcast(bool enable)
+{
+    discovery_broadcast_enabled = enable;
+    ESP_LOGI(TAG, "Discovery broadcast %s", enable ? "enabled" : "disabled");
+}
+
+void gvcp_set_discovery_broadcast_interval(uint32_t interval_ms)
+{
+    if (interval_ms >= 1000 && interval_ms <= 30000) {
+        discovery_broadcast_interval_ms = interval_ms;
+        ESP_LOGI(TAG, "Discovery broadcast interval set to %d ms", interval_ms);
+    } else {
+        ESP_LOGW(TAG, "Invalid broadcast interval %d ms, keeping current %d ms", 
+                 interval_ms, discovery_broadcast_interval_ms);
+    }
+}
+
+esp_err_t gvcp_trigger_discovery_broadcast(void)
+{
+    if (!discovery_broadcast_enabled) {
+        ESP_LOGW(TAG, "Discovery broadcast is disabled");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (sock < 0) {
+        ESP_LOGW(TAG, "GVCP socket not yet initialized, discovery broadcast deferred");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    ESP_LOGI(TAG, "Triggering immediate discovery broadcast");
+    esp_err_t result = send_discovery_broadcast();
+    if (result == ESP_OK) {
+        last_discovery_broadcast_time = esp_log_timestamp();
+    }
+    return result;
+}
+
+uint32_t gvcp_get_discovery_broadcasts_sent(void)
+{
+    return discovery_broadcasts_sent;
+}
+
+uint32_t gvcp_get_discovery_broadcast_failures(void)
+{
+    return discovery_broadcast_failures;
+}
+
+uint32_t gvcp_get_discovery_broadcast_sequence(void)
+{
+    return discovery_broadcast_sequence;
 }

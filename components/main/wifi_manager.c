@@ -4,6 +4,7 @@
 #include "esp_netif.h"
 #include "freertos/event_groups.h"
 #include "status_led.h"
+#include "gvcp_handler.h"
 
 static const char *TAG = "wifi_manager";
 
@@ -37,6 +38,10 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         s_retry_num = 0;
         status_led_set_state(LED_STATE_ON);
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        
+        // Trigger immediate discovery broadcast to announce device on network
+        ESP_LOGI(TAG, "Triggering discovery broadcast due to IP acquisition");
+        gvcp_trigger_discovery_broadcast();
     }
 }
 

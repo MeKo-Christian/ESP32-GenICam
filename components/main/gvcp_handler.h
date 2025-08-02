@@ -34,7 +34,7 @@
 #define GVCP_ERROR_INVALID_HEADER    0x800E
 #define GVCP_ERROR_WRONG_CONFIG      0x800F
 
-#define GVBS_DISCOVERY_DATA_SIZE     0xf8
+#define GVBS_DISCOVERY_DATA_SIZE     0x300  // Include XML URL at offset 0x200
 
 // Bootstrap register offsets (from Aravis GVBS definitions)
 #define GVBS_VERSION_OFFSET                  0x00000000
@@ -48,6 +48,11 @@
 #define GVBS_SERIAL_NUMBER_OFFSET           0x000000d8
 #define GVBS_USER_DEFINED_NAME_OFFSET       0x000000e8
 #define GVBS_XML_URL_0_OFFSET               0x00000200
+
+// Additional standard GVBS registers that Aravis might check
+#define GVBS_SUPPORTED_IP_CONFIG_OFFSET     0x00000020  // IP configuration options
+#define GVBS_CURRENT_SUBNET_MASK_OFFSET     0x00000014  // Current subnet mask  
+#define GVBS_CURRENT_DEFAULT_GATEWAY_OFFSET 0x00000018  // Current gateway
 
 // Acquisition control registers (custom addresses beyond bootstrap region)
 #define GENICAM_ACQUISITION_START_OFFSET    0x00001000
@@ -94,6 +99,13 @@
 #define GENICAM_CONNECTION_FAILURES_OFFSET  0x000010A8
 #define GENICAM_RECOVERY_MODE_OFFSET        0x000010AC
 
+// Discovery broadcast control registers
+#define GENICAM_DISCOVERY_BROADCAST_ENABLE_OFFSET    0x000010B0
+#define GENICAM_DISCOVERY_BROADCAST_INTERVAL_OFFSET  0x000010B4
+#define GENICAM_DISCOVERY_BROADCASTS_SENT_OFFSET     0x000010B8
+#define GENICAM_DISCOVERY_BROADCAST_FAILURES_OFFSET  0x000010BC
+#define GENICAM_DISCOVERY_BROADCAST_SEQUENCE_OFFSET  0x000010C0
+
 // GVCP packet header structure
 typedef struct __attribute__((packed)) {
     uint8_t packet_type;
@@ -123,3 +135,11 @@ uint32_t gvcp_get_total_unknown_commands(void);
 // Connection status management
 void gvcp_set_connection_status_bit(uint8_t bit_position, bool value);
 uint32_t gvcp_get_connection_status(void);
+
+// Discovery broadcast management
+void gvcp_enable_discovery_broadcast(bool enable);
+void gvcp_set_discovery_broadcast_interval(uint32_t interval_ms);
+esp_err_t gvcp_trigger_discovery_broadcast(void);
+uint32_t gvcp_get_discovery_broadcasts_sent(void);
+uint32_t gvcp_get_discovery_broadcast_failures(void);
+uint32_t gvcp_get_discovery_broadcast_sequence(void);
