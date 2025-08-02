@@ -43,8 +43,8 @@ static uint32_t gvcp_last_socket_recreation = 0;
 static uint32_t gvcp_socket_recreation_interval_ms = 15000; // Min 15s between recreations
 
 // Discovery broadcast configuration
-static bool discovery_broadcast_enabled = true;
-static uint32_t discovery_broadcast_interval_ms = 3000; // 3 seconds as per GigE Vision standard
+static bool discovery_broadcast_enabled = false;
+static uint32_t discovery_broadcast_interval_ms = 5000;
 static uint32_t last_discovery_broadcast_time = 0;
 static uint32_t discovery_broadcast_sequence = 0;
 static uint32_t discovery_broadcast_retries = 3; // Number of retries for broadcast
@@ -285,11 +285,15 @@ esp_err_t gvcp_init(void)
     // Set GVCP socket active bit
     connection_status |= 0x01;
 
-    // Send initial discovery broadcast to announce presence
-    ESP_LOGI(TAG, "GVCP initialized, sending initial discovery broadcast");
-    esp_err_t broadcast_result = gvcp_trigger_discovery_broadcast();
-    if (broadcast_result != ESP_OK) {
-        ESP_LOGW(TAG, "Initial discovery broadcast failed, will retry in periodic cycle");
+    // Send initial discovery broadcast to announce presence (only if enabled)
+    if (discovery_broadcast_enabled) {
+        ESP_LOGI(TAG, "GVCP initialized, sending initial discovery broadcast");
+        esp_err_t broadcast_result = gvcp_trigger_discovery_broadcast();
+        if (broadcast_result != ESP_OK) {
+            ESP_LOGW(TAG, "Initial discovery broadcast failed, will retry in periodic cycle");
+        }
+    } else {
+        ESP_LOGI(TAG, "GVCP initialized, discovery broadcasts disabled by default");
     }
 
     return ESP_OK;
