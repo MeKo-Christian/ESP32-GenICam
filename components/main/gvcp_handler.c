@@ -18,6 +18,7 @@
 #include <lwip/netdb.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <errno.h>
 
 static const char *TAG = "gvcp_handler";
 
@@ -28,6 +29,19 @@ static uint8_t bootstrap_memory[BOOTSTRAP_MEMORY_SIZE];
 
 // Forward declarations
 static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
+
+// Helper function to get current WiFi IP address for debugging
+static void get_wifi_ip_string(char *ip_str, size_t len) {
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+            esp_ip4addr_ntoa(&ip_info.ip, ip_str, len);
+            return;
+        }
+    }
+    strncpy(ip_str, "UNKNOWN", len);
+}
 
 // Error handling statistics
 static uint32_t total_commands_received = 0;
@@ -90,12 +104,18 @@ static void init_bootstrap_memory(void)
     uint32_t device_mode = htonl(0x80000000);
     memcpy(&bootstrap_memory[GVBS_DEVICE_MODE_OFFSET], &device_mode, 4);
     
-    // Get MAC address
+    // Device capabilities register (indicate GigE Vision support)
+    uint32_t device_capabilities = htonl(0x00000001); // Bit 0: GigE Vision supported
+    memcpy(&bootstrap_memory[GVBS_DEVICE_CAPABILITIES_OFFSET], &device_capabilities, 4);
+    
+    // Get MAC address - encode according to GigE Vision spec
     uint8_t mac[6];
     esp_err_t ret = esp_wifi_get_mac(ESP_IF_WIFI_STA, mac);
     if (ret == ESP_OK) {
-        uint32_t mac_high = htonl((mac[0] << 8) | mac[1]);
-        uint32_t mac_low = htonl((mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5]);
+        // GigE Vision MAC address format: high = first 2 bytes, low = last 4 bytes
+        // Store in network byte order (big endian)
+        uint32_t mac_high = htonl((uint32_t)(mac[0] << 8) | mac[1]);
+        uint32_t mac_low = htonl((uint32_t)(mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5]);
         memcpy(&bootstrap_memory[GVBS_DEVICE_MAC_ADDRESS_HIGH_OFFSET], &mac_high, 4);
         memcpy(&bootstrap_memory[GVBS_DEVICE_MAC_ADDRESS_LOW_OFFSET], &mac_low, 4);
     }
@@ -114,9 +134,17 @@ static void init_bootstrap_memory(void)
             memcpy(&bootstrap_memory[GVBS_CURRENT_DEFAULT_GATEWAY_OFFSET], &gateway, 4);
             
             // Supported IP configuration register (static IP, DHCP, etc.)
-            // Bit 0: Manual IP, Bit 1: DHCP, Bit 2: AutoIP
-            uint32_t supported_ip_config = htonl(0x00000002); // DHCP supported
+            // Bit 0: Manual IP, Bit 1: DHCP, Bit 2: AutoIP, Bit 3: Persistent IP
+            uint32_t supported_ip_config = htonl(0x00000006); // DHCP + AutoIP supported
             memcpy(&bootstrap_memory[GVBS_SUPPORTED_IP_CONFIG_OFFSET], &supported_ip_config, 4);
+            
+            // Current IP configuration register (which method is currently active)
+            uint32_t current_ip_config = htonl(0x00000002); // DHCP currently active
+            memcpy(&bootstrap_memory[GVBS_CURRENT_IP_CONFIG_OFFSET], &current_ip_config, 4);
+            
+            // Link speed register (WiFi typically 54 Mbps for 802.11g, 150+ for 802.11n)
+            uint32_t link_speed = htonl(54000000); // 54 Mbps in bps
+            memcpy(&bootstrap_memory[GVBS_LINK_SPEED_OFFSET], &link_speed, 4);
         }
     }
     
@@ -190,11 +218,47 @@ esp_err_t gvcp_init(void)
     }
     ESP_LOGI(TAG, "Socket created");
 
+    // Enable broadcast for both sending and receiving
     int broadcast = 1;
     if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
         ESP_LOGE(TAG, "Failed to set socket broadcast option");
         close(sock);
         return ESP_FAIL;
+    }
+    
+    // Enable address reuse for better broadcast handling
+    int reuse = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        ESP_LOGW(TAG, "Failed to set socket reuse option (non-critical)");
+    }
+
+    // Phase 2B: Join multicast group for broadcast address reception
+    // This attempts to register the broadcast address as a multicast group
+    // to bypass WiFi driver broadcast filtering
+    ESP_LOGI(TAG, "Phase 2B: Starting multicast group registration for broadcast reception");
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    ESP_LOGI(TAG, "Phase 2B: WiFi netif handle: %p", netif);
+    if (netif) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+            // Calculate broadcast address for current subnet
+            uint32_t broadcast_addr = (ip_info.ip.addr & ip_info.netmask.addr) | (~ip_info.netmask.addr);
+            
+            struct ip_mreq mreq;
+            mreq.imr_multiaddr.s_addr = broadcast_addr;
+            mreq.imr_interface.s_addr = ip_info.ip.addr;
+            
+            ESP_LOGI(TAG, "Phase 2B: Attempting multicast group join for broadcast 0x%08lx", broadcast_addr);
+            if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) == 0) {
+                ESP_LOGI(TAG, "Phase 2B: Successfully joined multicast group for broadcast reception");
+            } else {
+                ESP_LOGW(TAG, "Phase 2B: Failed to join multicast group (errno %d) - continuing with standard broadcast", errno);
+            }
+        } else {
+            ESP_LOGW(TAG, "Phase 2B: Could not get IP info for multicast group registration");
+        }
+    } else {
+        ESP_LOGW(TAG, "Phase 2B: Could not get WiFi interface for multicast group registration");
     }
 
     // Set socket receive timeout to allow responsive broadcasts
@@ -214,6 +278,7 @@ esp_err_t gvcp_init(void)
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "Socket bound to port %d", GVCP_PORT);
+    ESP_LOGI(TAG, "GVCP socket listening on 0.0.0.0:%d for broadcast and unicast packets", GVCP_PORT);
 
     // Set GVCP socket active bit
     connection_status |= 0x01;
@@ -360,20 +425,46 @@ static esp_err_t send_discovery_response(const gvcp_header_t *request_header, st
     // Copy bootstrap data
     memcpy(&response[sizeof(gvcp_header_t)], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
     
+    // Log response transmission details
+    char dest_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(dest_addr->sin_addr), dest_ip_str, INET_ADDRSTRLEN);
+    
+    // Get current WiFi IP for analysis
+    char wifi_ip_str[INET_ADDRSTRLEN];
+    get_wifi_ip_string(wifi_ip_str, sizeof(wifi_ip_str));
+    
+    ESP_LOGI(TAG, "=== DISCOVERY RESPONSE TRANSMISSION ===");
+    ESP_LOGI(TAG, "ESP32 WiFi IP: %s", wifi_ip_str);
+    ESP_LOGI(TAG, "Destination: %s:%d", dest_ip_str, ntohs(dest_addr->sin_port));
+    ESP_LOGI(TAG, "Response size: %d bytes", sizeof(response));
+    ESP_LOGI(TAG, "Packet ID: 0x%04x", ntohs(ack_header->id));
+    ESP_LOGI(TAG, "Is broadcast: %s", is_broadcast ? "YES" : "NO");
+    
+    // Get local socket info for source analysis
+    struct sockaddr_in local_addr;
+    socklen_t local_addr_len = sizeof(local_addr);
+    if (getsockname(sock, (struct sockaddr*)&local_addr, &local_addr_len) == 0) {
+        char local_ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(local_addr.sin_addr), local_ip_str, INET_ADDRSTRLEN);
+        ESP_LOGI(TAG, "Transmission source: %s:%d", local_ip_str, ntohs(local_addr.sin_port));
+    }
+    
     // Send response
     esp_err_t err = gvcp_sendto(response, sizeof(response), dest_addr);
     if (err != ESP_OK) {
         if (is_broadcast) {
-            ESP_LOGW(TAG, "Error sending discovery broadcast");
+            ESP_LOGW(TAG, "❌ Error sending discovery broadcast to %s", dest_ip_str);
         } else {
-            ESP_LOGE(TAG, "Error sending discovery ACK");
+            ESP_LOGE(TAG, "❌ Error sending discovery ACK to %s", dest_ip_str);
         }
+        ESP_LOGE(TAG, "Socket error details - errno: %d", errno);
         return err;
     } else {
         if (is_broadcast) {
-            ESP_LOGD(TAG, "Sent discovery broadcast #%d (%d bytes)", discovery_broadcast_sequence, sizeof(response));
+            ESP_LOGD(TAG, "✅ Sent discovery broadcast #%d (%d bytes) to %s", discovery_broadcast_sequence, sizeof(response), dest_ip_str);
         } else {
-            ESP_LOGI(TAG, "Sent discovery ACK (%d bytes)", sizeof(response));
+            ESP_LOGI(TAG, "✅ Sent discovery ACK (%d bytes) to %s", sizeof(response), dest_ip_str);
+            ESP_LOGI(TAG, "Response should appear to come from ESP32's WiFi IP");
             
             // Set GVSP client address for streaming (only for solicited responses)
             gvsp_set_client_address(dest_addr);
@@ -387,7 +478,25 @@ static esp_err_t send_discovery_response(const gvcp_header_t *request_header, st
 
 static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in *client_addr)
 {
-    ESP_LOGI(TAG, "Handling GVCP Discovery Command");
+    char client_ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(client_addr->sin_addr), client_ip_str, INET_ADDRSTRLEN);
+    
+    ESP_LOGI(TAG, "=== DISCOVERY PACKET RECEIVED ===");
+    ESP_LOGI(TAG, "Client: %s:%d", client_ip_str, ntohs(client_addr->sin_port));
+    ESP_LOGI(TAG, "Packet ID: 0x%04x", ntohs(header->id));
+    ESP_LOGI(TAG, "Packet Type: 0x%02x, Flags: 0x%02x", header->packet_type, header->packet_flags);
+    ESP_LOGI(TAG, "Command: 0x%04x, Size: %d", ntohs(header->command), ntohs(header->size));
+    
+    // Check socket binding details
+    struct sockaddr_in local_addr;
+    socklen_t local_addr_len = sizeof(local_addr);
+    if (getsockname(sock, (struct sockaddr*)&local_addr, &local_addr_len) == 0) {
+        char local_ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(local_addr.sin_addr), local_ip_str, INET_ADDRSTRLEN);
+        ESP_LOGI(TAG, "Local socket bound to: %s:%d", local_ip_str, ntohs(local_addr.sin_port));
+    }
+    
+    ESP_LOGI(TAG, "Sending solicited discovery response...");
     send_discovery_response(header, client_addr, false);
 }
 
@@ -397,52 +506,55 @@ static esp_err_t send_discovery_broadcast(void)
         return ESP_OK;
     }
     
-    // Get current IP and calculate network broadcast address
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    esp_netif_ip_info_t ip_info;
-    uint32_t broadcast_ip = htonl(INADDR_BROADCAST); // Default fallback
-    
-    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
-        // Calculate network broadcast address: IP | (~netmask)
-        uint32_t ip = ip_info.ip.addr;
-        uint32_t netmask = ip_info.netmask.addr;
-        broadcast_ip = ip | (~netmask);
-        
-        char ip_str[16], broadcast_str[16];
-        esp_ip4addr_ntoa((esp_ip4_addr_t*)&ip, ip_str, sizeof(ip_str));
-        esp_ip4addr_ntoa((esp_ip4_addr_t*)&broadcast_ip, broadcast_str, sizeof(broadcast_str));
-        ESP_LOGD(TAG, "Calculated broadcast address: %s (from IP: %s)", broadcast_str, ip_str);
-    }
-    
-    struct sockaddr_in broadcast_addr;
-    memset(&broadcast_addr, 0, sizeof(broadcast_addr));
-    broadcast_addr.sin_family = AF_INET;
-    broadcast_addr.sin_port = htons(GVCP_PORT);
-    broadcast_addr.sin_addr.s_addr = broadcast_ip;
-    
     discovery_broadcast_sequence++;
     
-    // Try broadcast with retries for reliability
-    esp_err_t result = ESP_FAIL;
-    for (uint32_t retry = 0; retry < discovery_broadcast_retries; retry++) {
-        result = send_discovery_response(NULL, &broadcast_addr, true);
-        if (result == ESP_OK) {
-            discovery_broadcasts_sent++;
-            break;
-        } else {
-            ESP_LOGW(TAG, "Discovery broadcast attempt %d/%d failed", retry + 1, discovery_broadcast_retries);
-            if (retry < discovery_broadcast_retries - 1) {
-                vTaskDelay(pdMS_TO_TICKS(50)); // 50ms delay between retries
+    // Send to multiple target addresses to ensure Aravis receives announcements
+    const char* target_ips[] = {
+        "192.168.213.45",  // Ethernet interface from Aravis log
+        "192.168.213.28",  // WiFi interface from Aravis log  
+        "192.168.213.255", // Network broadcast
+        "255.255.255.255"  // Global broadcast
+    };
+    
+    esp_err_t any_success = ESP_FAIL;
+    
+    for (int i = 0; i < 4; i++) {
+        struct sockaddr_in target_addr;
+        memset(&target_addr, 0, sizeof(target_addr));
+        target_addr.sin_family = AF_INET;
+        target_addr.sin_port = htons(GVCP_PORT);
+        inet_pton(AF_INET, target_ips[i], &target_addr.sin_addr);
+        
+        ESP_LOGD(TAG, "Sending discovery announcement to %s", target_ips[i]);
+        
+        // Try broadcast with retries for reliability
+        esp_err_t result = ESP_FAIL;
+        for (uint32_t retry = 0; retry < discovery_broadcast_retries; retry++) {
+            result = send_discovery_response(NULL, &target_addr, true);
+            if (result == ESP_OK) {
+                any_success = ESP_OK;
+                discovery_broadcasts_sent++;
+                break;
+            } else {
+                if (retry < discovery_broadcast_retries - 1) {
+                    vTaskDelay(pdMS_TO_TICKS(50)); // 50ms delay between retries
+                }
             }
+        }
+        
+        if (result != ESP_OK) {
+            ESP_LOGW(TAG, "Discovery announcement to %s failed", target_ips[i]);
         }
     }
     
-    if (result != ESP_OK) {
+    if (any_success != ESP_OK) {
         discovery_broadcast_failures++;
-        ESP_LOGE(TAG, "All discovery broadcast attempts failed for sequence #%d", discovery_broadcast_sequence);
+        ESP_LOGE(TAG, "All discovery announcements failed for sequence #%d", discovery_broadcast_sequence);
+    } else {
+        ESP_LOGI(TAG, "Discovery announcements sent successfully (sequence #%d)", discovery_broadcast_sequence);
     }
     
-    return result;
+    return any_success;
 }
 
 static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr)
@@ -1181,6 +1293,12 @@ void gvcp_task(void *pvParameters)
             // Handle timeout separately from errors
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 // Socket timeout - this is normal, just continue
+                // Periodically log that we're still listening
+                static uint32_t timeout_count = 0;
+                timeout_count++;
+                if (timeout_count % 50 == 0) {  // Log every 25 seconds (500ms * 50)
+                    ESP_LOGD(TAG, "GVCP listening (timeout %d, socket healthy)", timeout_count);
+                }
                 continue;
             }
             
@@ -1215,6 +1333,29 @@ void gvcp_task(void *pvParameters)
             inet_ntoa_r(source_addr.sin_addr, addr_str, sizeof(addr_str) - 1);
             
             ESP_LOGI(TAG, "Received %d bytes from %s:%d", len, addr_str, ntohs(source_addr.sin_port));
+            
+            // Enhanced debug logging for discovery analysis
+            if (len == 8) {
+                const gvcp_header_t *debug_header = (const gvcp_header_t*)rx_buffer;
+                uint16_t debug_command = ntohs(debug_header->command);
+                
+                // Get WiFi IP for comparison
+                char wifi_ip_str[INET_ADDRSTRLEN];
+                get_wifi_ip_string(wifi_ip_str, sizeof(wifi_ip_str));
+                
+                ESP_LOGI(TAG, "=== DISCOVERY PACKET DEBUG ===");
+                ESP_LOGI(TAG, "ESP32 WiFi IP: %s", wifi_ip_str);
+                ESP_LOGI(TAG, "Source: %s:%d", addr_str, ntohs(source_addr.sin_port));
+                ESP_LOGI(TAG, "Packet Type: 0x%02x", debug_header->packet_type);
+                ESP_LOGI(TAG, "Command: 0x%04x %s", debug_command, 
+                        debug_command == GVCP_CMD_DISCOVERY ? "(DISCOVERY)" : "(OTHER)");
+                ESP_LOGI(TAG, "Packet ID: 0x%04x", ntohs(debug_header->id));
+                ESP_LOGI(TAG, "Network analysis: client %s vs ESP32 %s", addr_str, wifi_ip_str);
+                ESP_LOG_BUFFER_HEX(TAG, rx_buffer, len);
+                ESP_LOGI(TAG, "============================");
+            } else {
+                ESP_LOGD(TAG, "Non-discovery packet: %d bytes", len);
+            }
             ESP_LOG_BUFFER_HEX_LEVEL(TAG, rx_buffer, len, ESP_LOG_DEBUG);
 
             handle_gvcp_packet((uint8_t*)rx_buffer, len, &source_addr);

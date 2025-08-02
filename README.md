@@ -42,6 +42,9 @@ just aravis-viewer            # Launch camera viewer GUI
 
 # Manual testing
 just test-discovery <ESP32_IP>    # Test UDP discovery
+
+# If discovery fails (WiFi broadcast limitation):
+just discovery-proxy <ESP32_IP>   # Start discovery proxy (failsafe)
 ```
 
 ## ✅ What's Implemented
@@ -83,6 +86,7 @@ just clean                   # Clean artifacts
 just test-discovery <ip>     # Test UDP discovery manually
 just aravis-test            # Discover with Aravis tools
 just aravis-viewer          # Launch GUI camera viewer
+just discovery-proxy <ip>   # Start discovery proxy (WiFi broadcast failsafe)
 just capture-packets        # Network protocol debugging
 just status                 # Project and network status
 just show-xml               # Display current GenICam XML
@@ -137,9 +141,24 @@ Works with existing GenICam/GigE Vision applications:
 | Issue | Check | Solution |
 |-------|-------|----------|
 | Discovery fails | WiFi connection, port 3956 | `just status`, firewall settings |
+| Aravis can't discover | ESP32 WiFi broadcast limits | `just discovery-proxy <ESP32_IP>` |
 | XML errors | GenICam compliance | `just validate` |
 | No images | GVSP streaming | `just capture-packets`, check acquisition |
 | Build issues | Dependencies, WiFi config | `just setup`, `just wifi-config` |
+
+### Discovery Proxy (WiFi Broadcast Failsafe)
+
+If Aravis cannot discover the ESP32-CAM due to WiFi broadcast limitations:
+
+```bash
+# Terminal 1: Start discovery proxy
+just discovery-proxy 192.168.1.100
+
+# Terminal 2: Test discovery  
+just aravis-test              # Should now find device
+```
+
+**How it works**: The proxy forwards broadcast discovery packets as unicast to ESP32, enabling Aravis integration on WiFi networks with broadcast filtering.
 
 ### Network Protocol Debugging
 

@@ -53,6 +53,9 @@
 #define GVBS_SUPPORTED_IP_CONFIG_OFFSET     0x00000020  // IP configuration options
 #define GVBS_CURRENT_SUBNET_MASK_OFFSET     0x00000014  // Current subnet mask  
 #define GVBS_CURRENT_DEFAULT_GATEWAY_OFFSET 0x00000018  // Current gateway
+#define GVBS_CURRENT_IP_CONFIG_OFFSET       0x0000001C  // Current IP configuration method
+#define GVBS_LINK_SPEED_OFFSET              0x0000002C  // Link speed in Mbps  
+#define GVBS_DEVICE_CAPABILITIES_OFFSET     0x00000010  // Device capabilities
 
 // Acquisition control registers (custom addresses beyond bootstrap region)
 #define GENICAM_ACQUISITION_START_OFFSET    0x00001000

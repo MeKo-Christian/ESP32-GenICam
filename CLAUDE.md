@@ -47,6 +47,9 @@ just test-discovery <ESP32_IP_ADDRESS>
 just aravis-test        # Discovery test
 just aravis-viewer      # Launch camera viewer
 
+# Discovery proxy failsafe (if WiFi broadcast limitations prevent discovery)
+just discovery-proxy <ESP32_IP_ADDRESS>   # Run in separate terminal
+
 # Traditional methods
 echo "test" | nc -u <ESP32_IP_ADDRESS> 3956
 arv-tool-0.8 --debug=all
@@ -66,6 +69,9 @@ xmllint --schema GenApiSchema_Version_1_0.xsd esp32_genicam.xml --noout
 ```bash
 # Show project and network status
 just status
+
+# Discovery proxy for WiFi broadcast limitations (failsafe)
+just discovery-proxy <ESP32_IP>
 
 # Capture GVCP protocol packets
 just capture-packets [interface]

@@ -108,6 +108,62 @@ The core implementation is complete and functional. Potential extensions include
 - [ ] **Protocol Validation** - Automated compliance testing against GenICam/GigE Vision standards
 - [ ] **Performance Benchmarks** - Frame rate and latency measurement tools
 
+### Bug Fixes & Client Compatibility
+
+#### Aravis Direct Discovery Investigation
+**Problem**: ESP32 receives broadcast discovery perfectly and responds correctly, but Aravis ignores responses and requires discovery proxy for reliable operation.
+
+**Current Status**: Discovery proxy (`scripts/discovery_proxy.py`) provides 100% reliable workaround.
+
+**Root Cause Analysis Steps**:
+- [ ] **Deep Protocol Analysis** - Compare packet flows between proxy vs direct discovery
+  - [ ] Capture exact packet timing and source addresses during proxy operation
+  - [ ] Capture packet flows during direct ESP32 discovery attempts
+  - [ ] Document precise differences in packet characteristics and routing
+  - [ ] Analyze why Aravis accepts proxy responses but rejects ESP32 responses
+
+- [ ] **ESP32 Enhanced Debugging** - Add comprehensive debug logging to GVCP handler
+  - [ ] Log discovery packet reception details (source IP, interface, timing)
+  - [ ] Log response transmission details (destination, socket binding, send result)
+  - [ ] Track response packet routing and delivery confirmation
+  - [ ] Add debug modes for verbose discovery/response analysis
+  - [ ] Test if enhanced logging reveals hidden issues
+
+- [ ] **Aravis Behavior Analysis** - Test client-side configurations and alternatives
+  - [ ] Test Aravis environment variables for discovery filtering/timeouts
+  - [ ] Test single interface binding to eliminate multi-interface confusion
+  - [ ] Compare behavior with other GigE Vision clients (PyAravis, Spinnaker, Vimba)
+  - [ ] Investigate Aravis source code for response validation logic
+  - [ ] Document if issue is Aravis-specific or industry-wide limitation
+
+- [ ] **Debug Tooling Enhancement** - Create advanced debugging utilities
+  - [ ] Real-time packet capture and analysis tools
+  - [ ] ESP32 discovery response validation tools
+  - [ ] Network interface and routing analysis utilities
+  - [ ] Automated test suite for different network configurations
+
+**Potential Resolution Steps**:
+- [ ] **ESP32 Response Optimization** - If analysis reveals ESP32-side improvements
+  - [ ] Optimize response timing to match Aravis expectations
+  - [ ] Enhance bootstrap register compliance for strict validation
+  - [ ] Test alternative socket configurations for better compatibility
+
+- [ ] **Aravis Configuration Solution** - If client-side configuration resolves issue
+  - [ ] Document working Aravis environment variable combinations
+  - [ ] Create setup scripts for optimal Aravis configuration
+  - [ ] Test solution across different network environments
+
+- [ ] **Alternative Client Integration** - If Aravis has inherent limitations
+  - [ ] Validate ESP32 compatibility with other GigE Vision software
+  - [ ] Document which clients work natively vs require proxy
+  - [ ] Provide client-specific integration guides
+
+**Success Criteria**: Either achieve reliable native Aravis discovery OR definitively document why discovery proxy is the optimal architecture for this network topology.
+
+**Priority**: High (user experience improvement)  
+**Estimated Time**: 4-8 hours  
+**Fallback**: Discovery proxy remains as proven production solution
+
 ### Interface & Usability
 - [x] **Web Configuration** - Browser-based camera parameter adjustment
 - [ ] **Serial Interface** - Runtime configuration via UART commands
@@ -134,4 +190,5 @@ ESP32GenICam/
 - [x] Complete development workflow with validation and testing tools
 
 The ESP32-CAM GenICam implementation is **production-ready** for internal testing of industrial vision software stacks.
+
 

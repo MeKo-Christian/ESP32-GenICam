@@ -132,6 +132,15 @@ analyze-discovery ip:
     @echo "Analyzing ESP32-CAM discovery response from {{ip}}..."
     @python3 scripts/analyze_discovery_response.py {{ip}} || echo "❌ Discovery analysis failed"
 
+# Run discovery proxy for ESP32-CAM (enables Aravis discovery)
+discovery-proxy esp32_ip="192.168.213.40":
+    @echo "Starting GigE Vision Discovery Proxy for ESP32-CAM..."
+    @echo "This enables Aravis to discover ESP32-CAM devices"
+    @echo "ESP32-CAM IP: {{esp32_ip}}"
+    @echo "Press Ctrl+C to stop"
+    @echo ""
+    python3 scripts/discovery_proxy.py {{esp32_ip}} --debug
+
 # Test with Aravis discovery tools
 aravis-test:
     @echo "Testing with Aravis tools..."
@@ -139,6 +148,13 @@ aravis-test:
     @echo "Running Aravis camera test..."
     @timeout 10 arv-test-0.8 2>/dev/null || echo "⚠️  No cameras discovered or test timeout"
     @echo "Tip: Make sure ESP32-CAM is running and connected to same network"
+
+# Test with Aravis debug output for troubleshooting
+aravis-debug:
+    @echo "Running Aravis with debug output..."
+    @which arv-test-0.8 > /dev/null || (echo "❌ Aravis tools not installed" && exit 1)
+    @echo "This will show detailed discovery process..."
+    @timeout 15 arv-test-0.8 --debug=all 2>&1 | head -100
 
 # View discovered cameras with Aravis viewer
 aravis-viewer:

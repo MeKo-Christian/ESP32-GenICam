@@ -37,10 +37,30 @@ CONFIG_ESP_WIFI_ENABLED=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 
-# Network Configuration
+# Network Configuration - Enhanced for Broadcast/Multicast Reception
 CONFIG_LWIP_SO_RCVBUF=y
-CONFIG_LWIP_UDP_RECVMBOX_SIZE=16
+
+# Phase 2A: Enhanced LWIP Settings for Broadcast Reception
+# Enable multicast support for better broadcast handling
+CONFIG_LWIP_IGMP=y
+CONFIG_LWIP_MULTICAST_PING=y
+
+# Increased buffer sizes for broadcast reception (Phase 2A)
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+
+# Optimize for broadcast/multicast reception
+CONFIG_LWIP_SO_REUSE=y
+CONFIG_LWIP_SO_REUSE_RXTOALL=y
+
+# Additional broadcast optimizations
+CONFIG_LWIP_NETIF_LOOPBACK=y
+CONFIG_LWIP_IPV4=y
+CONFIG_LWIP_BROADCAST_PING=y
+
+# Enhanced socket options for broadcast handling
+CONFIG_LWIP_SOCKET_MULTITHREAD_SAFE=y
+CONFIG_LWIP_MAX_SOCKETS=16
 
 # Camera specific configurations (will be defined in main component)
 # These are custom configs defined in our Kconfig files
