@@ -46,7 +46,7 @@ void app_main(void)
     ESP_ERROR_CHECK(gvsp_init());
 
     ESP_LOGI(TAG, "Creating GVCP task...");
-    xTaskCreate(gvcp_task, "gvcp_task", 4096, NULL, 3, NULL);
+    xTaskCreate(gvcp_task, "gvcp_task", 8192, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "Creating GVSP task...");
     xTaskCreate(gvsp_task, "gvsp_task", 4096, NULL, 3, NULL);

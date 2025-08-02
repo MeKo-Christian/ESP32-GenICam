@@ -1,6 +1,6 @@
 #include "genicam_xml.h"
 
-const char genicam_xml_data[] = 
+const uint8_t genicam_xml_data[] = 
 "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
 "\n"
 "<RegisterDescription\n"

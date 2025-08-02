@@ -30,18 +30,6 @@ static uint8_t bootstrap_memory[BOOTSTRAP_MEMORY_SIZE];
 // Forward declarations
 static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
 
-// Helper function to get current WiFi IP address for debugging
-static void get_wifi_ip_string(char *ip_str, size_t len) {
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif) {
-        esp_netif_ip_info_t ip_info;
-        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
-            esp_ip4addr_ntoa(&ip_info.ip, ip_str, len);
-            return;
-        }
-    }
-    strncpy(ip_str, "UNKNOWN", len);
-}
 
 // Error handling statistics
 static uint32_t total_commands_received = 0;
@@ -69,7 +57,7 @@ static uint32_t discovery_broadcast_failures = 0;
 #define DEVICE_VERSION "1.0.0"
 #define DEVICE_SERIAL "ESP32CAM001"
 #define DEVICE_USER_NAME "ESP32Camera"
-#define XML_URL "Local:0x10000;0x2000"
+#define XML_URL "Local:0x10000;0x2000;"
 
 // XML memory mapping
 #define XML_BASE_ADDRESS 0x10000
@@ -129,9 +117,14 @@ static void init_bootstrap_memory(void)
             uint32_t netmask = ip_info.netmask.addr;
             uint32_t gateway = ip_info.gw.addr;
             
-            memcpy(&bootstrap_memory[GVBS_CURRENT_IP_ADDRESS_OFFSET], &ip, 4);
-            memcpy(&bootstrap_memory[GVBS_CURRENT_SUBNET_MASK_OFFSET], &netmask, 4);
-            memcpy(&bootstrap_memory[GVBS_CURRENT_DEFAULT_GATEWAY_OFFSET], &gateway, 4);
+            // Convert to network byte order (big-endian) for GigE Vision compliance
+            uint32_t ip_be = htonl(ip);
+            uint32_t netmask_be = htonl(netmask);
+            uint32_t gateway_be = htonl(gateway);
+            
+            memcpy(&bootstrap_memory[GVBS_CURRENT_IP_ADDRESS_OFFSET], &ip_be, 4);
+            memcpy(&bootstrap_memory[GVBS_CURRENT_SUBNET_MASK_OFFSET], &netmask_be, 4);
+            memcpy(&bootstrap_memory[GVBS_CURRENT_DEFAULT_GATEWAY_OFFSET], &gateway_be, 4);
             
             // Supported IP configuration register (static IP, DHCP, etc.)
             // Bit 0: Manual IP, Bit 1: DHCP, Bit 2: AutoIP, Bit 3: Persistent IP
@@ -203,6 +196,15 @@ esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_co
 esp_err_t gvcp_init(void)
 {
     struct sockaddr_in dest_addr;
+    
+    // Validate GenICam XML data before initialization
+    ESP_LOGI(TAG, "Validating GenICam XML data...");
+    if (genicam_xml_size == 0) {
+        ESP_LOGE(TAG, "CRITICAL: genicam_xml_size is 0!");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "GenICam XML validation: size=%d bytes, first chars: %.32s", 
+             genicam_xml_size, (const char*)genicam_xml_data);
     
     // Initialize bootstrap memory
     init_bootstrap_memory();
@@ -403,7 +405,8 @@ static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_
     }
 }
 
-static esp_err_t send_discovery_response(const gvcp_header_t *request_header, struct sockaddr_in *dest_addr, bool is_broadcast)
+// Simple function to send discovery response with exact packet ID using the same socket
+static esp_err_t send_discovery_response_with_exact_id(uint16_t exact_packet_id, struct sockaddr_in *dest_addr)
 {
     // Create discovery ACK response
     uint8_t response[sizeof(gvcp_header_t) + GVBS_DISCOVERY_DATA_SIZE];
@@ -414,61 +417,118 @@ static esp_err_t send_discovery_response(const gvcp_header_t *request_header, st
     ack_header->command = htons(GVCP_ACK_DISCOVERY);
     ack_header->size = htons(GVBS_DISCOVERY_DATA_SIZE);
     
-    if (request_header != NULL) {
-        // Solicited response - echo back the packet ID
-        ack_header->id = request_header->id;
-    } else {
-        // Unsolicited broadcast - use sequence number
-        ack_header->id = htons(discovery_broadcast_sequence & 0xFFFF);
-    }
+    // CRITICAL FIX: Echo back the EXACT packet ID from the request
+    ack_header->id = exact_packet_id;
     
     // Copy bootstrap data
     memcpy(&response[sizeof(gvcp_header_t)], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
     
-    // Log response transmission details
-    char dest_ip_str[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &(dest_addr->sin_addr), dest_ip_str, INET_ADDRSTRLEN);
+    ESP_LOGI(TAG, "SIMPLE FIX: Sending discovery response to %s:%d with packet ID=0x%04x", 
+             inet_ntoa(dest_addr->sin_addr), ntohs(dest_addr->sin_port), ntohs(ack_header->id));
     
-    // Get current WiFi IP for analysis
-    char wifi_ip_str[INET_ADDRSTRLEN];
-    get_wifi_ip_string(wifi_ip_str, sizeof(wifi_ip_str));
+    // PORT TRACKING: Log the destination address just before sendto
+    ESP_LOGI(TAG, "PORT TRACK 4: dest_addr->sin_port = 0x%04x (%d) before sendto", 
+             dest_addr->sin_port, ntohs(dest_addr->sin_port));
+    ESP_LOGI(TAG, "PORT TRACK 4: Destination IP = %s", inet_ntoa(dest_addr->sin_addr));
     
-    ESP_LOGI(TAG, "=== DISCOVERY RESPONSE TRANSMISSION ===");
-    ESP_LOGI(TAG, "ESP32 WiFi IP: %s", wifi_ip_str);
-    ESP_LOGI(TAG, "Destination: %s:%d", dest_ip_str, ntohs(dest_addr->sin_port));
-    ESP_LOGI(TAG, "Response size: %d bytes", sizeof(response));
-    ESP_LOGI(TAG, "Packet ID: 0x%04x", ntohs(ack_header->id));
-    ESP_LOGI(TAG, "Is broadcast: %s", is_broadcast ? "YES" : "NO");
-    
-    // Get local socket info for source analysis
-    struct sockaddr_in local_addr;
-    socklen_t local_addr_len = sizeof(local_addr);
-    if (getsockname(sock, (struct sockaddr*)&local_addr, &local_addr_len) == 0) {
-        char local_ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(local_addr.sin_addr), local_ip_str, INET_ADDRSTRLEN);
-        ESP_LOGI(TAG, "Transmission source: %s:%d", local_ip_str, ntohs(local_addr.sin_port));
+    // SIMPLE ARAVIS FIX: Use the same socket (sock) for both recvfrom() and sendto()
+    // This automatically handles port matching without binding conflicts
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Invalid GVCP socket for discovery response");
+        return ESP_FAIL;
     }
+    
+    // Send response using the same socket - dest_addr contains the exact address from recvfrom()
+    int err = sendto(sock, response, sizeof(response), 0, 
+                     (struct sockaddr *)dest_addr, sizeof(*dest_addr));
+    
+    if (err < 0) {
+        ESP_LOGW(TAG, "Discovery response send failed, errno: %d (%s)", errno, strerror(errno));
+        return ESP_FAIL;
+    } else {
+        ESP_LOGI(TAG, "SIMPLE FIX: Discovery response sent (%d bytes) using same socket", sizeof(response));
+        
+        // Set GVSP client address for streaming
+        gvsp_set_client_address(dest_addr);
+        // Set client connected bit
+        connection_status |= 0x04;
+        return ESP_OK;
+    }
+}
+
+static esp_err_t send_discovery_response(const gvcp_header_t *request_header, struct sockaddr_in *dest_addr, bool is_broadcast)
+{
+    // Create discovery ACK response with proper GigE Vision header
+    // Use 8-byte GigE Vision header + bootstrap data
+    uint8_t response[8 + GVBS_DISCOVERY_DATA_SIZE];
+    
+    // Determine packet ID
+    uint16_t packet_id;
+    if (request_header != NULL) {
+        // CRITICAL: Solicited response - MUST echo back the EXACT same packet ID as request
+        packet_id = ntohs(request_header->id);
+        ESP_LOGI(TAG, "SOLICITED Response: echoing request ID=0x%04x back exactly", packet_id);
+    } else {
+        // Unsolicited broadcast - use current sequence number (incremented per packet)
+        packet_id = discovery_broadcast_sequence & 0xFFFF;
+        ESP_LOGI(TAG, "UNSOLICITED Broadcast: using sequence=%d as unique packet ID=0x%04x", 
+                 discovery_broadcast_sequence, packet_id);
+    }
+    
+    // Construct proper GigE Vision GVCP header (as suggested by user)
+    response[0] = 0x42;                     // 'B' - GigE Vision magic byte 1
+    response[1] = 0x45;                     // 'E' - GigE Vision magic byte 2
+    response[2] = 0x81;                     // ACK + Big Endian flag
+    response[3] = 0x02;                     // DISCOVERY_CMD 
+    response[4] = 0x00;                     // status high byte
+    response[5] = 0x00;                     // status low byte  
+    response[6] = (packet_id >> 8) & 0xFF;  // packet ID high byte
+    response[7] = packet_id & 0xFF;         // packet ID low byte
+    
+    // GVCP Header validation and debug logging
+    ESP_LOGI(TAG, "GigE Vision GVCP Header: magic=%02x%02x, type=0x%02x, cmd=0x%02x, status=0x%04x, id=0x%04x",
+             response[0], response[1], response[2], response[3], 
+             (response[4] << 8) | response[5], (response[6] << 8) | response[7]);
+    
+    // Verify header structure integrity
+    if (response[0] != 0x42 || response[1] != 0x45) {
+        ESP_LOGE(TAG, "ERROR: Invalid magic bytes 0x%02x%02x, should be 0x4245", 
+                 response[0], response[1]);
+    }
+    if (response[2] != 0x81) {
+        ESP_LOGE(TAG, "ERROR: Invalid packet type 0x%02x, should be 0x81", response[2]);
+    }
+    if (response[3] != 0x02) {
+        ESP_LOGE(TAG, "ERROR: Invalid command 0x%02x, should be 0x02 (DISCOVERY)", response[3]);
+    }
+    
+    // Copy bootstrap data after the 8-byte GigE Vision header
+    memcpy(&response[8], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
+    
+    // Simplified logging to reduce stack usage
+    ESP_LOGI(TAG, "Sending discovery %s to %s:%d, ID:0x%04x", 
+             is_broadcast ? "broadcast" : "response",
+             inet_ntoa(dest_addr->sin_addr), ntohs(dest_addr->sin_port), packet_id);
+    
+    // Log the complete packet structure before transmission
+    ESP_LOGI(TAG, "Complete packet: GigE header=8 bytes, payload=%d bytes, total=%d bytes",
+             GVBS_DISCOVERY_DATA_SIZE, (int)sizeof(response));
+    
+    // Log first 16 bytes of packet for verification (should start with "42 45 81 02")
+    ESP_LOG_BUFFER_HEX_LEVEL(TAG, response, 16, ESP_LOG_INFO);
     
     // Send response
     esp_err_t err = gvcp_sendto(response, sizeof(response), dest_addr);
     if (err != ESP_OK) {
-        if (is_broadcast) {
-            ESP_LOGW(TAG, "❌ Error sending discovery broadcast to %s", dest_ip_str);
-        } else {
-            ESP_LOGE(TAG, "❌ Error sending discovery ACK to %s", dest_ip_str);
-        }
-        ESP_LOGE(TAG, "Socket error details - errno: %d", errno);
+        ESP_LOGW(TAG, "Discovery send failed, errno: %d", errno);
         return err;
     } else {
-        if (is_broadcast) {
-            ESP_LOGD(TAG, "✅ Sent discovery broadcast #%d (%d bytes) to %s", discovery_broadcast_sequence, sizeof(response), dest_ip_str);
-        } else {
-            ESP_LOGI(TAG, "✅ Sent discovery ACK (%d bytes) to %s", sizeof(response), dest_ip_str);
-            ESP_LOGI(TAG, "Response should appear to come from ESP32's WiFi IP");
-            
+        ESP_LOGI(TAG, "Discovery %s sent successfully (%d bytes) with proper GigE Vision GVCP header (42 45 81 02)", 
+                 is_broadcast ? "broadcast" : "response", (int)sizeof(response));
+        
+        if (!is_broadcast) {
             // Set GVSP client address for streaming (only for solicited responses)
             gvsp_set_client_address(dest_addr);
-            
             // Set client connected bit
             connection_status |= 0x04;
         }
@@ -478,26 +538,16 @@ static esp_err_t send_discovery_response(const gvcp_header_t *request_header, st
 
 static void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in *client_addr)
 {
-    char client_ip_str[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &(client_addr->sin_addr), client_ip_str, INET_ADDRSTRLEN);
+    uint16_t request_id = ntohs(header->id);
+    ESP_LOGI(TAG, "Discovery SOLICITED from %s:%d, request ID:0x%04x (raw:0x%04x) - MUST echo back exactly", 
+             inet_ntoa(client_addr->sin_addr), ntohs(client_addr->sin_port), request_id, header->id);
     
-    ESP_LOGI(TAG, "=== DISCOVERY PACKET RECEIVED ===");
-    ESP_LOGI(TAG, "Client: %s:%d", client_ip_str, ntohs(client_addr->sin_port));
-    ESP_LOGI(TAG, "Packet ID: 0x%04x", ntohs(header->id));
-    ESP_LOGI(TAG, "Packet Type: 0x%02x, Flags: 0x%02x", header->packet_type, header->packet_flags);
-    ESP_LOGI(TAG, "Command: 0x%04x, Size: %d", ntohs(header->command), ntohs(header->size));
+    // PORT TRACKING: Log the client address before calling response function
+    ESP_LOGI(TAG, "PORT TRACK 3: client_addr->sin_port = 0x%04x (%d) in handle_discovery_cmd", 
+             client_addr->sin_port, ntohs(client_addr->sin_port));
     
-    // Check socket binding details
-    struct sockaddr_in local_addr;
-    socklen_t local_addr_len = sizeof(local_addr);
-    if (getsockname(sock, (struct sockaddr*)&local_addr, &local_addr_len) == 0) {
-        char local_ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(local_addr.sin_addr), local_ip_str, INET_ADDRSTRLEN);
-        ESP_LOGI(TAG, "Local socket bound to: %s:%d", local_ip_str, ntohs(local_addr.sin_port));
-    }
-    
-    ESP_LOGI(TAG, "Sending solicited discovery response...");
-    send_discovery_response(header, client_addr, false);
+    // EXPLICIT: Create and send discovery response with exact packet ID echo
+    send_discovery_response_with_exact_id(header->id, client_addr);
 }
 
 static esp_err_t send_discovery_broadcast(void)
@@ -505,8 +555,6 @@ static esp_err_t send_discovery_broadcast(void)
     if (!discovery_broadcast_enabled) {
         return ESP_OK;
     }
-    
-    discovery_broadcast_sequence++;
     
     // Send to multiple target addresses to ensure Aravis receives announcements
     const char* target_ips[] = {
@@ -517,15 +565,19 @@ static esp_err_t send_discovery_broadcast(void)
     };
     
     esp_err_t any_success = ESP_FAIL;
+    uint32_t broadcast_cycle = discovery_broadcast_sequence + 1;
     
     for (int i = 0; i < 4; i++) {
+        // Increment sequence for each individual broadcast packet to ensure unique packet IDs
+        discovery_broadcast_sequence++;
+        
         struct sockaddr_in target_addr;
         memset(&target_addr, 0, sizeof(target_addr));
         target_addr.sin_family = AF_INET;
         target_addr.sin_port = htons(GVCP_PORT);
         inet_pton(AF_INET, target_ips[i], &target_addr.sin_addr);
         
-        ESP_LOGD(TAG, "Sending discovery announcement to %s", target_ips[i]);
+        ESP_LOGD(TAG, "Sending discovery announcement to %s (packet ID: %d)", target_ips[i], discovery_broadcast_sequence);
         
         // Try broadcast with retries for reliability
         esp_err_t result = ESP_FAIL;
@@ -549,9 +601,10 @@ static esp_err_t send_discovery_broadcast(void)
     
     if (any_success != ESP_OK) {
         discovery_broadcast_failures++;
-        ESP_LOGE(TAG, "All discovery announcements failed for sequence #%d", discovery_broadcast_sequence);
+        ESP_LOGE(TAG, "All discovery announcements failed for broadcast cycle #%d", broadcast_cycle);
     } else {
-        ESP_LOGI(TAG, "Discovery announcements sent successfully (sequence #%d)", discovery_broadcast_sequence);
+        ESP_LOGI(TAG, "Discovery announcements sent successfully (broadcast cycle #%d, packets %d-%d)", 
+                 broadcast_cycle, broadcast_cycle, discovery_broadcast_sequence);
     }
     
     return any_success;
@@ -585,10 +638,17 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         return;
     }
     
-    // Allow larger reads for XML content at address 0x10000
-    uint32_t max_read_size = (address == 0x10000) ? 8192 : 512;
+    // Allow larger reads for XML content at address 0x10000 and XML region
+    uint32_t max_read_size;
+    if (address >= XML_BASE_ADDRESS && address < XML_BASE_ADDRESS + genicam_xml_size) {
+        max_read_size = 8192; // Large reads allowed for XML region
+    } else {
+        max_read_size = 512;  // Standard reads for other regions
+    }
+    
     if (size > max_read_size) {
-        ESP_LOGW(TAG, "Read size %d exceeds maximum %d, clamping", size, max_read_size);
+        ESP_LOGW(TAG, "Read size %d exceeds maximum %d for address 0x%08x, clamping", 
+                 size, max_read_size, address);
         size = max_read_size;
     }
     
@@ -603,6 +663,7 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
     
     // Create read memory ACK response - use dynamic allocation for large XML reads
     uint8_t *response;
+    uint8_t stack_response[sizeof(gvcp_header_t) + 4 + 512];
     bool use_heap = (size > 512);
     
     if (use_heap) {
@@ -613,7 +674,6 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
             return;
         }
     } else {
-        uint8_t stack_response[sizeof(gvcp_header_t) + 4 + 512];
         response = stack_response;
     }
     
@@ -639,17 +699,38 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
         uint32_t xml_offset = address - XML_BASE_ADDRESS;
         uint32_t xml_read_size = size;
         
+        ESP_LOGI(TAG, "XML read request: addr=0x%08x, offset=%d, requested_size=%d, xml_size=%d", 
+                 address, xml_offset, size, genicam_xml_size);
+        
+        // Validate XML size
+        if (genicam_xml_size == 0) {
+            ESP_LOGE(TAG, "ERROR: genicam_xml_size is 0!");
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_ADDRESS, client_addr);
+            if (use_heap) free(response);
+            return;
+        }
+        
         if (xml_offset + xml_read_size > genicam_xml_size) {
             xml_read_size = genicam_xml_size - xml_offset;
+            ESP_LOGI(TAG, "XML read size clamped to %d bytes", xml_read_size);
         }
         
         if (xml_read_size > 0) {
             memcpy(data_ptr, &genicam_xml_data[xml_offset], xml_read_size);
+            ESP_LOGI(TAG, "XML data copied: %d bytes from offset %d", xml_read_size, xml_offset);
+            
+            // Log first few bytes for debugging
+            if (xml_read_size >= 16) {
+                ESP_LOG_BUFFER_HEX_LEVEL(TAG, data_ptr, 16, ESP_LOG_INFO);
+            }
+        } else {
+            ESP_LOGW(TAG, "XML read size is 0 after bounds checking");
         }
         
         // Fill remaining with zeros if needed
         if (xml_read_size < size) {
             memset(data_ptr + xml_read_size, 0, size - xml_read_size);
+            ESP_LOGI(TAG, "Filled %d bytes with zeros after XML data", size - xml_read_size);
         }
     } else if (address == GENICAM_ACQUISITION_START_OFFSET && size >= 4) {
         // Acquisition start register
@@ -1198,6 +1279,10 @@ static void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_i
 {
     total_commands_received++;
     
+    // PORT TRACKING: Log the client address at entry
+    ESP_LOGI(TAG, "PORT TRACK 2: client_addr->sin_port = 0x%04x (%d) in handle_gvcp_packet", 
+             client_addr->sin_port, ntohs(client_addr->sin_port));
+    
     // Enhanced packet validation
     if (len < sizeof(gvcp_header_t)) {
         ESP_LOGE(TAG, "Packet too small for GVCP header: %d bytes", len);
@@ -1232,6 +1317,17 @@ static void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_i
     
     ESP_LOGI(TAG, "GVCP packet: type=0x%02x, cmd=0x%04x, id=0x%04x, size=%d",
              header->packet_type, command, packet_id, payload_size);
+    
+    // Extra debug for discovery commands to track the packet ID issue
+    if (command == GVCP_CMD_DISCOVERY) {
+        ESP_LOGI(TAG, "DISCOVERY command received with packet ID=0x%04x, header raw ID=0x%04x",
+                 packet_id, header->id);
+        
+        // Debug the raw packet bytes for packet ID (bytes 6-7)
+        const uint8_t *raw_packet = (const uint8_t*)header;
+        ESP_LOGI(TAG, "Raw packet ID bytes: [6]=0x%02x [7]=0x%02x, combined=0x%04x", 
+                 raw_packet[6], raw_packet[7], (raw_packet[6] << 8) | raw_packet[7]);
+    }
     
     switch (command) {
         case GVCP_CMD_DISCOVERY:
@@ -1333,28 +1429,18 @@ void gvcp_task(void *pvParameters)
             inet_ntoa_r(source_addr.sin_addr, addr_str, sizeof(addr_str) - 1);
             
             ESP_LOGI(TAG, "Received %d bytes from %s:%d", len, addr_str, ntohs(source_addr.sin_port));
+            ESP_LOGI(TAG, "PORT TRACK 1: source_addr.sin_port = 0x%04x (%d) after recvfrom", 
+                     source_addr.sin_port, ntohs(source_addr.sin_port));
             
-            // Enhanced debug logging for discovery analysis
+            // Simplified discovery packet logging
             if (len == 8) {
                 const gvcp_header_t *debug_header = (const gvcp_header_t*)rx_buffer;
                 uint16_t debug_command = ntohs(debug_header->command);
                 
-                // Get WiFi IP for comparison
-                char wifi_ip_str[INET_ADDRSTRLEN];
-                get_wifi_ip_string(wifi_ip_str, sizeof(wifi_ip_str));
-                
-                ESP_LOGI(TAG, "=== DISCOVERY PACKET DEBUG ===");
-                ESP_LOGI(TAG, "ESP32 WiFi IP: %s", wifi_ip_str);
-                ESP_LOGI(TAG, "Source: %s:%d", addr_str, ntohs(source_addr.sin_port));
-                ESP_LOGI(TAG, "Packet Type: 0x%02x", debug_header->packet_type);
-                ESP_LOGI(TAG, "Command: 0x%04x %s", debug_command, 
-                        debug_command == GVCP_CMD_DISCOVERY ? "(DISCOVERY)" : "(OTHER)");
-                ESP_LOGI(TAG, "Packet ID: 0x%04x", ntohs(debug_header->id));
-                ESP_LOGI(TAG, "Network analysis: client %s vs ESP32 %s", addr_str, wifi_ip_str);
-                ESP_LOG_BUFFER_HEX(TAG, rx_buffer, len);
-                ESP_LOGI(TAG, "============================");
-            } else {
-                ESP_LOGD(TAG, "Non-discovery packet: %d bytes", len);
+                if (debug_command == GVCP_CMD_DISCOVERY) {
+                    ESP_LOGI(TAG, "Discovery packet from %s:%d, ID:0x%04x", 
+                             addr_str, ntohs(source_addr.sin_port), ntohs(debug_header->id));
+                }
             }
             ESP_LOG_BUFFER_HEX_LEVEL(TAG, rx_buffer, len, ESP_LOG_DEBUG);
 

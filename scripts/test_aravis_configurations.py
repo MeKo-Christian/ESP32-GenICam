@@ -36,7 +36,7 @@ class AravisConfigTester:
         try:
             start_time = time.time()
             result = subprocess.run(
-                ['arv-test-0.8'],
+                ['arv-test-0.10'],
                 env=env,
                 capture_output=True,
                 text=True,
@@ -89,7 +89,7 @@ class AravisConfigTester:
             return test_result
             
         except FileNotFoundError:
-            self.log(f"  ❌ ERROR: arv-test-0.8 not found. Install with: sudo apt install aravis-tools")
+            self.log(f"  ❌ ERROR: arv-test-0.10 not found. Install with: sudo apt install aravis-tools")
             return None
     
     def test_basic_discovery(self):

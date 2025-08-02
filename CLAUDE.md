@@ -52,8 +52,8 @@ just discovery-proxy <ESP32_IP_ADDRESS>   # Run in separate terminal
 
 # Traditional methods
 echo "test" | nc -u <ESP32_IP_ADDRESS> 3956
-arv-tool-0.8 --debug=all
-arv-viewer-0.8
+arv-tool-0.10 --debug=all
+arv-viewer-0.10
 ```
 
 ### GenICam XML Validation (Working)
@@ -168,7 +168,7 @@ idf.py fullclean        # Full clean
 5. ✅ **GVSP Streaming** - Image frames transmitted as UDP packet streams
 
 **Integration Testing - Ready for Use:**
-- Use Aravis library tools (`arv-tool-0.8`, `arv-viewer-0.8`) for protocol validation
+- Use Aravis library tools (`arv-tool-0.10`, `arv-viewer-0.10`) for protocol validation
 - Wireshark packet capture for protocol debugging on UDP port 3956
 - ✅ Compatible with go-aravis and other GenICam-based vision software
 - ✅ Real camera streaming working end-to-end

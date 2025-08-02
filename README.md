@@ -185,8 +185,8 @@ Automated test script for full protocol validation:
 ```bash
 # Test complete discovery → streaming pipeline
 just aravis-test                    # Should discover ESP32-CAM
-arv-tool-0.8 -n "ESP32-CAM" --features    # Download and display XML features
-arv-tool-0.8 -n "ESP32-CAM" acquisition   # Test acquisition commands
+arv-tool-0.10 -n "ESP32-CAM" --features    # Download and display XML features
+arv-tool-0.10 -n "ESP32-CAM" acquisition   # Test acquisition commands
 ```
 
 ## 📖 References

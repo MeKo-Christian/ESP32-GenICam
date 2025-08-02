@@ -162,7 +162,7 @@ def test_aravis_with_intercepted_responses():
     print("This test requires running Aravis manually...")
     print()
     print("1. Start this test")
-    print("2. Run 'arv-test-0.8' in another terminal")
+    print("2. Run 'arv-test-0.10' in another terminal")
     print("3. See if intercepted responses work")
     print()
     

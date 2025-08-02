@@ -54,7 +54,7 @@ def fix_aravis_discovery():
     # Test discovery with fixed configuration
     print("\nTesting Aravis discovery with interface fix...")
     try:
-        result = subprocess.run(['arv-test-0.8'], 
+        result = subprocess.run(['arv-test-0.10'], 
                               env=env, 
                               capture_output=True, 
                               text=True, 

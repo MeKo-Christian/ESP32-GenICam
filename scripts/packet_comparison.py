@@ -174,7 +174,7 @@ def test_aravis_with_monitoring():
         monitor_sock.settimeout(1.0)
         
         print("Monitoring GVCP port 3956...")
-        print("Run 'arv-test-0.8' in another terminal NOW")
+        print("Run 'arv-test-0.10' in another terminal NOW")
         
         # Monitor for 15 seconds
         start_time = time.time()

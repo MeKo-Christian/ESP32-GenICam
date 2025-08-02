@@ -11,7 +11,7 @@ setup:
     @echo "Checking for required tools..."
     @just _check-esp-idf
     @which xmllint > /dev/null || (echo "❌ xmllint not found. Install with: sudo apt install libxml2-utils" && exit 1)
-    @which arv-test-0.8 > /dev/null || echo "⚠️  Aravis tools not found. Install with: sudo apt install aravis-tools"
+    @which arv-test-0.10 > /dev/null || echo "⚠️  Aravis tools not found. Install with: sudo apt install aravis-tools"
     @echo "Setting up WiFi configuration..."
     @just _setup-wifi-config
     @echo "✅ Development environment ready"
@@ -144,23 +144,23 @@ discovery-proxy esp32_ip="192.168.213.40":
 # Test with Aravis discovery tools
 aravis-test:
     @echo "Testing with Aravis tools..."
-    @which arv-test-0.8 > /dev/null || (echo "❌ Aravis tools not installed" && exit 1)
+    @which arv-test-0.10 > /dev/null || (echo "❌ Aravis tools not installed" && exit 1)
     @echo "Running Aravis camera test..."
-    @timeout 10 arv-test-0.8 2>/dev/null || echo "⚠️  No cameras discovered or test timeout"
+    @timeout 10 arv-test-0.10 2>/dev/null || echo "⚠️  No cameras discovered or test timeout"
     @echo "Tip: Make sure ESP32-CAM is running and connected to same network"
 
 # Test with Aravis debug output for troubleshooting
 aravis-debug:
     @echo "Running Aravis with debug output..."
-    @which arv-test-0.8 > /dev/null || (echo "❌ Aravis tools not installed" && exit 1)
+    @which arv-test-0.10 > /dev/null || (echo "❌ Aravis tools not installed" && exit 1)
     @echo "This will show detailed discovery process..."
-    @timeout 15 arv-test-0.8 --debug=all 2>&1 | head -100
+    @timeout 15 arv-test-0.10 --debug=all 2>&1 | head -100
 
 # View discovered cameras with Aravis viewer
 aravis-viewer:
     @echo "Starting Aravis viewer..."
-    @which arv-viewer-0.8 > /dev/null || (echo "❌ arv-viewer-0.8 not found" && exit 1)
-    arv-viewer-0.8
+    @which arv-viewer-0.10 > /dev/null || (echo "❌ arv-viewer-0.10 not found" && exit 1)
+    arv-viewer-0.10
 
 # Run all validation and tests
 test: validate build
@@ -243,13 +243,13 @@ integration-test:
     @echo "Running ESP32-CAM GenICam integration test suite..."
     @echo "=============================================="
     @echo "1. Testing device discovery..."
-    @timeout 10 arv-test-0.8 2>/dev/null || echo "⚠️  Discovery test timeout or no devices found"
+    @timeout 10 arv-test-0.10 2>/dev/null || echo "⚠️  Discovery test timeout or no devices found"
     @echo ""
     @echo "2. Testing feature access..."
-    @arv-tool-0.8 -n "ESP32-CAM" --features 2>/dev/null || echo "⚠️  Feature access failed - check device connection"
+    @arv-tool-0.10 -n "ESP32-CAM" --features 2>/dev/null || echo "⚠️  Feature access failed - check device connection"
     @echo ""
     @echo "3. Testing acquisition commands..."
-    @arv-tool-0.8 -n "ESP32-CAM" acquisition 2>/dev/null || echo "⚠️  Acquisition test failed"
+    @arv-tool-0.10 -n "ESP32-CAM" acquisition 2>/dev/null || echo "⚠️  Acquisition test failed"
     @echo ""
     @echo "✅ Integration test complete. Check output above for any warnings."
     @echo "💡 Use 'just capture-packets' to debug protocol issues"

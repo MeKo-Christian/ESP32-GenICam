@@ -21,7 +21,7 @@ def analyze_aravis_sockets():
     
     print("2. Starting Aravis discovery with debug...")
     # Start Aravis in background
-    aravis_proc = subprocess.Popen(['arv-test-0.8'], 
+    aravis_proc = subprocess.Popen(['arv-test-0.10'], 
                                   stdout=subprocess.PIPE, 
                                   stderr=subprocess.PIPE,
                                   env={'ARV_DEBUG': 'interface,discovery'})

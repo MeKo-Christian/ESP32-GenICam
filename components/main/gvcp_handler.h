@@ -8,13 +8,16 @@
 
 #define GVCP_PORT 3956
 
-// GVCP Protocol Constants
+// GigE Vision GVCP Protocol Constants
+#define GVCP_MAGIC_BYTE_1            0x42  // 'B'
+#define GVCP_MAGIC_BYTE_2            0x45  // 'E'
+// Original GVCP constants for compatibility
 #define GVCP_PACKET_TYPE_ACK         0x00
 #define GVCP_PACKET_TYPE_CMD         0x42
 #define GVCP_PACKET_TYPE_ERROR       0x80
 
 #define GVCP_CMD_DISCOVERY           0x0002
-#define GVCP_ACK_DISCOVERY           0x0003
+#define GVCP_ACK_DISCOVERY           0x0002  // Discovery responses echo the same command code
 #define GVCP_CMD_READ_MEMORY         0x0084
 #define GVCP_ACK_READ_MEMORY         0x0085
 #define GVCP_CMD_WRITE_MEMORY        0x0086
@@ -109,7 +112,7 @@
 #define GENICAM_DISCOVERY_BROADCAST_FAILURES_OFFSET  0x000010BC
 #define GENICAM_DISCOVERY_BROADCAST_SEQUENCE_OFFSET  0x000010C0
 
-// GVCP packet header structure
+// GVCP packet header structure (original format for compatibility)
 typedef struct __attribute__((packed)) {
     uint8_t packet_type;
     uint8_t packet_flags;

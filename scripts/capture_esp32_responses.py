@@ -66,7 +66,7 @@ def test_aravis_concurrent():
     
     print("\nTesting concurrent discovery...")
     print("==============================")
-    print("Run 'arv-test-0.8' in another terminal NOW")
+    print("Run 'arv-test-0.10' in another terminal NOW")
     print("This will show if our socket interferes with Aravis...")
     
     # Monitor for any traffic on GVCP port

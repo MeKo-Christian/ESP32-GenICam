@@ -25,19 +25,13 @@ fi
 
 # Extract XML from C source if standalone file doesn't exist or is older
 if [ ! -f "$XML_FILE" ] || [ "$SOURCE_FILE" -nt "$XML_FILE" ]; then
-    echo "🔄 Extracting XML from $SOURCE_FILE..."
-    
-    # Extract the XML content from the C string with improved parsing
-    awk '/const char genicam_xml_data\[\] =/,/;$/ {
-        if ($0 ~ /^"/) {
-            gsub(/^"/, "");
-            gsub(/"$/, "");
-            gsub(/\\n/, "\n");
-            gsub(/\\"/, "\"");
-            if ($0 !~ /^;$/ && $0 !~ /^"$/) print;
-        }
-    }' "$SOURCE_FILE" | head -n -1 > "$XML_FILE"
-    
+    python3 scripts/extract_genicam_xml.py "$SOURCE_FILE" "$XML_FILE"
+        
+    if [ ! -s "$XML_FILE" ]; then
+        echo "❌ XML extraction failed: $XML_FILE is empty or missing"
+        exit 1
+    fi
+
     echo "✅ XML extracted to $XML_FILE"
 fi
 
@@ -105,8 +99,8 @@ fi
 
 echo ""
 echo "Next steps:"
-echo "- Test with live ESP32-CAM device using: arv-tool-0.8 --debug=all"
-echo "- View with Aravis viewer: arv-viewer-0.8"
+echo "- Test with live ESP32-CAM device using: arv-tool-0.10 --debug=all"
+echo "- View with Aravis viewer: arv-viewer-0.10"
 echo "- Check protocol with Wireshark on UDP port 3956"
 
 # Exit successfully since XML is well-formed and functional
