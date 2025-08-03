@@ -35,13 +35,17 @@ class GVCPClient:
     def send_gvcp_write(self, address, value):
         """Send GVCP WRITE_MEMORY command to write a register"""
         try:
-            # GVCP WRITE_MEMORY command  
-            cmd = 0x0082  # WRITE_MEMORY
-            length = 0x0003  # 3 words (12 bytes)
+            # GVCP WRITE_MEMORY command (standard Aravis format)
+            packet_type = 0x42  # Command packet
+            packet_flags = 0x00  # No flags
+            cmd = 0x0086  # WRITE_MEMORY (correct command code)
+            length = 0x0008  # 8 bytes total payload (ESP32 expects size in bytes, not words)
             req_id = self._get_next_req_id()
             
-            header = struct.pack('>HHHH', cmd, length, req_id, 0)
-            payload = struct.pack('>III', address, 4, value)  # address, size, value
+            # Aravis format: [packet_type][packet_flags][command][size][id]
+            header = struct.pack('>BBHHH', packet_type, packet_flags, cmd, length, req_id)
+            # ESP32 expects: [address (4 bytes)][data (4 bytes)] = 8 bytes total
+            payload = struct.pack('>II', address, value)  # address, value
             packet = header + payload
             
             self.sock.sendto(packet, (self.ip, 3956))
@@ -67,11 +71,15 @@ class GVCPClient:
             # Longer delay to ensure previous command is processed
             time.sleep(0.5)
             
-            cmd = 0x0080  # READ_MEMORY
+            # GVCP READ_MEMORY command (standard Aravis format)
+            packet_type = 0x42  # Command packet
+            packet_flags = 0x00  # No flags
+            cmd = 0x0084  # READ_MEMORY (correct command code)
             length = 0x0002  # 2 words (8 bytes)
             req_id = self._get_next_req_id()
             
-            header = struct.pack('>HHHH', cmd, length, req_id, 0)
+            # Aravis format: [packet_type][packet_flags][command][size][id]
+            header = struct.pack('>BBHHH', packet_type, packet_flags, cmd, length, req_id)
             payload = struct.pack('>II', address, 4)
             packet = header + payload
             

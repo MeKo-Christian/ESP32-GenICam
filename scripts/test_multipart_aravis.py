@@ -24,81 +24,169 @@ def run_command(cmd, timeout=10, capture_output=True):
     except Exception as e:
         return False, "", str(e)
 
+def discover_esp32_camera():
+    """Discover ESP32-CAM device and return its name"""
+    for attempt in range(3):
+        success, stdout, stderr = run_command("arv-tool-0.10", timeout=10)
+        
+        if success and stdout:
+            # Look for ESP32-related device names
+            lines = stdout.strip().split('\n')
+            for line in lines:
+                if 'ESP32' in line or 'GenICam' in line:
+                    # Extract device name from format "DeviceName (IP)"
+                    if '(' in line:
+                        device_name = line.split('(')[0].strip()
+                        return device_name
+            
+        if attempt < 2:
+            print(f"⚠️  Discovery attempt {attempt + 1} failed, retrying...")
+            time.sleep(2)
+    
+    return None
+
 def test_aravis_discovery():
     """Test basic Aravis discovery"""
     print("Testing Aravis discovery...")
-    success, stdout, stderr = run_command("arv-tool-0.10 --timeout=5000", timeout=8)
     
-    if success and "ESP32-CAM" in stdout:
-        print("✅ ESP32-CAM discovered by Aravis")
-        return True
+    device_name = discover_esp32_camera()
+    
+    if device_name:
+        print(f"✅ ESP32-CAM discovered by Aravis: {device_name}")
+        return True, device_name
     else:
         print("❌ ESP32-CAM not discovered by Aravis")
-        if stderr:
-            print(f"Error: {stderr}")
-        return False
+        print("Tip: Ensure ESP32-CAM is running and on the same network")
+        return False, None
 
-def test_chunk_mode_active():
+def test_chunk_mode_active(device_name):
     """Test ChunkModeActive feature access"""
     print("\nTesting ChunkModeActive feature...")
     
+    if not device_name:
+        print("❌ No device name provided")
+        return False
+    
     # Try to read ChunkModeActive feature
-    success, stdout, stderr = run_command('arv-tool-0.10 -n "ESP32-CAM" control ChunkModeActive', timeout=8)
+    cmd = f'arv-tool-0.10 -n "{device_name}" control ChunkModeActive'
+    success, stdout, stderr = run_command(cmd, timeout=10)
     
     if success:
-        print(f"✅ ChunkModeActive feature accessible: {stdout.strip()}")
+        value = stdout.strip() if stdout.strip() else "<empty>"
+        print(f"✅ ChunkModeActive feature accessible: {value}")
         return True
     else:
         print("❌ ChunkModeActive feature not accessible")
         if stderr:
             print(f"Error: {stderr}")
+        print(f"Command used: {cmd}")
         return False
 
-def test_chunk_component_selector():
+def test_chunk_component_selector(device_name):
     """Test ChunkComponentSelector feature"""
     print("\nTesting ChunkComponentSelector feature...")
     
-    success, stdout, stderr = run_command('arv-tool-0.10 -n "ESP32-CAM" control ChunkComponentSelector', timeout=8)
+    if not device_name:
+        print("❌ No device name provided")
+        return False
+    
+    cmd = f'arv-tool-0.10 -n "{device_name}" control ChunkComponentSelector'
+    success, stdout, stderr = run_command(cmd, timeout=10)
     
     if success:
-        print(f"✅ ChunkComponentSelector feature accessible: {stdout.strip()}")
+        value = stdout.strip() if stdout.strip() else "<empty>"
+        print(f"✅ ChunkComponentSelector feature accessible: {value}")
         return True
     else:
         print("❌ ChunkComponentSelector feature not accessible")
         if stderr:
             print(f"Error: {stderr}")
+        print(f"Command used: {cmd}")
         return False
 
-def test_sccfg_register():
-    """Test direct SCCFG register access"""
+def test_sccfg_register(device_name):
+    """Test direct SCCFG register access via features"""
     print("\nTesting direct SCCFG register (0x0d24) access...")
     
-    # Note: arv-tool doesn't have direct register access, so we'll test via features
-    success, stdout, stderr = run_command('arv-tool-0.10 -n "ESP32-CAM" features | grep -i chunk', timeout=8)
+    if not device_name:
+        print("❌ No device name provided")
+        return False
     
-    if success and stdout.strip():
-        print("✅ Chunk/multipart features found:")
-        for line in stdout.strip().split('\n'):
-            print(f"  {line}")
-        return True
+    # Note: arv-tool doesn't have direct register access, so we'll test via features
+    cmd = f'arv-tool-0.10 -n "{device_name}" features'
+    success, stdout, stderr = run_command(cmd, timeout=10)
+    
+    if success and stdout:
+        # Look for chunk-related features
+        chunk_features = []
+        for line in stdout.split('\n'):
+            if 'chunk' in line.lower() or 'multipart' in line.lower():
+                chunk_features.append(line.strip())
+        
+        if chunk_features:
+            print("✅ Chunk/multipart features found:")
+            for feature in chunk_features:
+                print(f"  {feature}")
+            return True
+        else:
+            print("❌ No chunk/multipart features found in feature list")
+            print("Available features:")
+            for line in stdout.split('\n')[:10]:  # Show first 10 features
+                if line.strip():
+                    print(f"  {line.strip()}")
+            return False
     else:
-        print("❌ No chunk/multipart features found")
+        print("❌ Failed to retrieve features list")
+        if stderr:
+            print(f"Error: {stderr}")
+        print(f"Command used: {cmd}")
         return False
 
-def test_xml_multipart_features():
+def test_xml_multipart_features(device_name):
     """Test if multipart features are in GenICam XML"""
     print("\nTesting GenICam XML for multipart features...")
     
-    # Get the GenICam XML and check for multipart features
-    success, stdout, stderr = run_command('arv-tool-0.10 -n "ESP32-CAM" genicam | grep -i -E "(chunk|multipart)"', timeout=8)
+    if not device_name:
+        print("❌ No device name provided")
+        return False
     
-    if success and stdout.strip():
-        print("✅ Multipart features found in GenICam XML:")
-        for line in stdout.strip().split('\n'):
-            print(f"  {line.strip()}")
-        return True
+    # Get the GenICam XML
+    cmd = f'arv-tool-0.10 -n "{device_name}" genicam'
+    success, stdout, stderr = run_command(cmd, timeout=10)
+    
+    if success and stdout:
+        # Look for chunk/multipart related terms
+        xml_content = stdout.lower()
+        multipart_terms = ['chunk', 'multipart']
+        found_features = []
+        
+        for term in multipart_terms:
+            if term in xml_content:
+                # Find lines containing the term
+                for line in stdout.split('\n'):
+                    if term in line.lower():
+                        found_features.append(line.strip())
+        
+        if found_features:
+            print("✅ Multipart features found in GenICam XML:")
+            # Remove duplicates and show unique features
+            unique_features = list(set(found_features))
+            for feature in unique_features[:10]:  # Show first 10 unique matches
+                if feature:
+                    print(f"  {feature}")
+            return True
+        else:
+            print("❌ No multipart features found in GenICam XML")
+            print("XML snippet (first 5 lines):")
+            for line in stdout.split('\n')[:5]:
+                if line.strip():
+                    print(f"  {line.strip()}")
+            return False
     else:
-        print("❌ No multipart features found in GenICam XML")
+        print("❌ Failed to retrieve GenICam XML")
+        if stderr:
+            print(f"Error: {stderr}")
+        print(f"Command used: {cmd}")
         return False
 
 def main():
@@ -120,7 +208,8 @@ def main():
     results = []
     
     # Test 1: Basic discovery
-    results.append(test_aravis_discovery())
+    discovery_result, device_name = test_aravis_discovery()
+    results.append(discovery_result)
     
     if args.quick:
         if results[0]:
@@ -130,17 +219,26 @@ def main():
             print("\n❌ Quick test failed - ESP32-CAM not discovered")
             sys.exit(1)
     
-    # Test 2: ChunkModeActive feature
-    results.append(test_chunk_mode_active())
-    
-    # Test 3: ChunkComponentSelector feature  
-    results.append(test_chunk_component_selector())
-    
-    # Test 4: SCCFG register access
-    results.append(test_sccfg_register())
-    
-    # Test 5: XML multipart features
-    results.append(test_xml_multipart_features())
+    # Skip remaining tests if discovery failed
+    if not discovery_result:
+        print("\n❌ Discovery failed - skipping remaining tests")
+        print("Please ensure ESP32-CAM is running and accessible")
+        # Add placeholder results for remaining tests
+        results.extend([False, False, False, False])
+    else:
+        print(f"\nUsing discovered device: {device_name}")
+        
+        # Test 2: ChunkModeActive feature
+        results.append(test_chunk_mode_active(device_name))
+        
+        # Test 3: ChunkComponentSelector feature  
+        results.append(test_chunk_component_selector(device_name))
+        
+        # Test 4: SCCFG register access
+        results.append(test_sccfg_register(device_name))
+        
+        # Test 5: XML multipart features
+        results.append(test_xml_multipart_features(device_name))
     
     # Summary
     print("\n" + "=" * 50)

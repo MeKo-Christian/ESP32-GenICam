@@ -9,18 +9,21 @@ This project implements a GenICam-compatible camera using an ESP32-CAM module th
 The core GenICam/GigE Vision implementation is **fully functional** with the following completed components:
 
 ### ✅ Core Protocol Implementation
+
 - **GVCP (GigE Vision Control Protocol)** - UDP port 3956 for device discovery and control
-- **GVSP (GigE Vision Stream Protocol)** - UDP streaming for image transmission  
+- **GVSP (GigE Vision Stream Protocol)** - UDP streaming for image transmission
 - **Bootstrap Registers** - Standard GigE Vision device identification and configuration
 - **GenICam XML** - Camera feature description served via memory reads
 
 ### ✅ Hardware Integration
+
 - **ESP32-CAM Support** - Real camera capture using ESP-IDF camera driver
 - **Image Processing** - JPEG/YUV422/RGB565 to Mono8 format conversion
 - **WiFi Connectivity** - Network communication for protocol compliance
 - **Pin Configuration** - AI-Thinker ESP32-CAM board support
 
 ### ✅ Image Streaming
+
 - **Real Frame Capture** - Actual ESP32-CAM OV2640 sensor integration
 - **GVSP Packet Structure** - Leader/Data/Trailer packet transmission
 - **Acquisition Control** - Start/Stop commands via GVCP
@@ -36,6 +39,7 @@ The implementation uses a multi-task ESP-IDF architecture:
 4. **Camera Task** - Captures frames from ESP32-CAM hardware
 
 **Core Modules:**
+
 - `wifi_manager.c/h` - Network connectivity management
 - `gvcp_handler.c/h` - GigE Vision Control Protocol implementation
 - `gvsp_handler.c/h` - GigE Vision Stream Protocol implementation
@@ -66,17 +70,38 @@ just capture-packets        # Network protocol debugging
 
 ## Testing Strategy
 
-**Protocol Validation:**
-- Device discovery via `arv-tool-0.10` and `arv-viewer-0.10`
-- GenICam XML download and parsing verification
-- GVCP command response validation
-- GVSP streaming protocol compliance
+The project now supports a **hybrid testing architecture** for faster, more maintainable validation:
 
-**Integration Testing:**
-- Compatible with Aravis library ecosystem
-- Works with go-aravis based applications  
-- Wireshark packet capture for protocol debugging
-- Real-time streaming validation
+### Host-Based Testing (Fast, Platform-Independent)
+
+- Protocol logic (GVCP, GVSP)
+- GenICam XML generation
+- Register map operations
+- Packet structures and state machines
+- Error handling and boundary tests
+
+### ESP-IDF Integration Tests (Hardware-Specific)
+
+- Camera sensor integration and FreeRTOS task coordination
+- UDP socket creation and WiFi connection
+- Real-world acquisition, packet sending, and performance validation
+
+### Host Testing Workflow (via `make` in `tests/host/`):
+
+- Fast unit tests: `gvcp_protocol`, `bootstrap`, `registers`, `genicam_xml`
+- Platform abstraction enables shared code between ESP32 and host
+- Mocks for logging, networking, and time
+
+### ESP-IDF Test Coverage
+
+- WiFi manager behavior and connectivity
+- Camera hardware initialization and frame validity
+- GVCP socket binding on port 3956
+
+### Automation
+
+- GitHub Actions runs host tests automatically on push and PR
+- Future: support CI stubs or simulated hardware for ESP tests
 
 ## Future Enhancements (Optional)
 
@@ -108,61 +133,6 @@ The core implementation is complete and functional. Potential extensions include
 - [ ] **Protocol Validation** - Automated compliance testing against GenICam/GigE Vision standards
 - [ ] **Performance Benchmarks** - Frame rate and latency measurement tools
 
-### Bug Fixes & Client Compatibility
-
-#### Aravis Direct Discovery Investigation
-**Problem**: ESP32 receives broadcast discovery perfectly and responds correctly, but Aravis ignores responses and requires discovery proxy for reliable operation.
-
-**Current Status**: Discovery proxy (`scripts/discovery_proxy.py`) provides 100% reliable workaround.
-
-**Root Cause Analysis Steps**:
-- [x] **Deep Protocol Analysis** - Compare packet flows between proxy vs direct discovery
-  - [x] Capture exact packet timing and source addresses during proxy operation
-  - [ ] Capture packet flows during direct ESP32 discovery attempts (requires ESP32 device)
-  - [x] Document precise differences in packet characteristics and routing
-  - [x] Analyze why Aravis accepts proxy responses but rejects ESP32 responses
-
-- [x] **ESP32 Enhanced Debugging** - Add comprehensive debug logging to GVCP handler
-  - [x] Log discovery packet reception details (source IP, interface, timing)
-  - [x] Log response transmission details (destination, socket binding, send result)
-  - [x] Track response packet routing and delivery confirmation
-  - [x] Add debug modes for verbose discovery/response analysis
-  - [ ] Test if enhanced logging reveals hidden issues (requires ESP32 device)
-
-- [x] **Aravis Behavior Analysis** - Test client-side configurations and alternatives
-  - [x] Test Aravis environment variables for discovery filtering/timeouts
-  - [x] Test single interface binding to eliminate multi-interface confusion
-  - [ ] Compare behavior with other GigE Vision clients (PyAravis, Spinnaker, Vimba)
-  - [x] Investigate Aravis source code for response validation logic
-  - [x] Document if issue is Aravis-specific or industry-wide limitation
-
-- [x] **Debug Tooling Enhancement** - Create advanced debugging utilities
-  - [x] Real-time packet capture and analysis tools
-  - [x] ESP32 discovery response validation tools
-  - [x] Network interface and routing analysis utilities
-  - [x] Automated test suite for different network configurations
-
-**Potential Resolution Steps**:
-- [ ] **ESP32 Response Optimization** - If analysis reveals ESP32-side improvements
-  - [ ] Optimize response timing to match Aravis expectations
-  - [ ] Enhance bootstrap register compliance for strict validation
-  - [ ] Test alternative socket configurations for better compatibility
-
-- [ ] **Aravis Configuration Solution** - If client-side configuration resolves issue
-  - [ ] Document working Aravis environment variable combinations
-  - [ ] Create setup scripts for optimal Aravis configuration
-  - [ ] Test solution across different network environments
-
-- [ ] **Alternative Client Integration** - If Aravis has inherent limitations
-  - [ ] Validate ESP32 compatibility with other GigE Vision software
-  - [ ] Document which clients work natively vs require proxy
-  - [ ] Provide client-specific integration guides
-
-**Success Criteria**: Either achieve reliable native Aravis discovery OR definitively document why discovery proxy is the optimal architecture for this network topology.
-
-**Priority**: High (user experience improvement)  
-**Estimated Time**: 4-8 hours  
-**Fallback**: Discovery proxy remains as proven production solution
 
 ### Interface & Usability
 - [x] **Web Configuration** - Browser-based camera parameter adjustment
@@ -176,10 +146,12 @@ ESP32GenICam/
 ├── src/                    # Core implementation (6 modules)
 ├── components/             # ESP32-camera driver integration
 ├── tools/schema/           # GenICam XML validation schema
+├── tests/host/             # Fast unit tests for host testing
 ├── justfile               # Development workflow commands
 ├── platformio.ini         # Build configuration and WiFi settings
 └── CLAUDE.md              # Developer guidance and architecture notes
 ```
+
 
 ## Success Criteria: ✅ ACHIEVED
 
@@ -190,5 +162,117 @@ ESP32GenICam/
 - [x] Complete development workflow with validation and testing tools
 
 The ESP32-CAM GenICam implementation is **production-ready** for internal testing of industrial vision software stacks.
+---
 
+## Appendix A: Host Testing Infrastructure Details
+
+### Architecture
+
+The test infrastructure separates hardware-dependent and platform-independent logic for high test coverage and short feedback cycles. Protocol logic is refactored into pure C modules with no ESP-IDF dependencies, organized under `src/gvcp`, `src/gvsp`, and `src/genicam`.
+
+### Directory Structure
+
+```
+src/
+├── gvcp/
+│   ├── protocol.c/h   # Packet validation, header creation
+│   ├── bootstrap.c/h  # Bootstrap register logic
+│   └── discovery.c/h  # Discovery logic
+├── gvsp/
+│   ├── streaming.c/h  # Stream state machine
+│   └── packets.c/h    # GVSP packet format
+├── genicam/
+│   ├── registers.c/h  # Register map + access rules
+│   └── xml.c/h        # XML generation
+├── utils/
+│   ├── platform.h     # Platform abstraction
+│   └── byte_order.c/h # Endianness
+
+platform_esp32.c       # ESP32 implementation of `platform_interface_t`
+platform_host.c        # Host implementation (used in tests)
+```
+
+### Host Tests
+
+**File: **``
+
+```makefile
+# Build & run all tests
+make run-tests
+```
+
+**Test files:**
+
+- `test_gvcp_protocol.c`
+- `test_bootstrap.c`
+- `test_registers.c`
+- `test_genicam_xml.c`
+
+**Example: test\_gvcp\_protocol.c**
+
+```c
+void test_packet_validation() {
+    gvcp_header_t header = { .packet_type = 0x42, .command = htons(0x0002) };
+    assert(gvcp_validate_packet_header(&header, sizeof(header)));
+}
+```
+
+### Mock Infrastructure
+
+**File: **``
+
+```c
+int mock_network_send(...) {
+    printf("MOCK: Sending packet\n");
+    return len;
+}
+```
+
+Used via `platform_interface_t` for unit testing send logic without real sockets.
+
+### Platform Interface
+
+**File: **``
+
+```c
+typedef struct {
+    void (*log_info)(...);
+    int (*network_send)(...);
+    uint32_t (*get_time_ms)(void);
+    void* (*malloc)(size_t);
+    void (*free)(void*);
+} platform_interface_t;
+extern const platform_interface_t* platform;
+```
+
+### ESP Integration
+
+Minimal Unity-based tests run with `idf.py test`. These focus on:
+
+- Camera frame acquisition
+- GVCP socket creation
+- WiFi status
+
+---
+
+## Appendix B: Platform Abstraction Interface
+
+**File: src/utils/platform.h**
+
+```c
+// Platform abstraction for ESP32 vs host testing
+typedef struct {
+    void (*log_info)(const char* tag, const char* format, ...);
+    void (*log_error)(const char* tag, const char* format, ...);
+    void (*log_warn)(const char* tag, const char* format, ...);
+    int (*network_send)(const void* data, size_t len, void* addr);
+    uint32_t (*get_time_ms)(void);
+    void* (*malloc)(size_t size);
+    void (*free)(void* ptr);
+} platform_interface_t;
+
+extern const platform_interface_t* platform;
+```
+
+Both host and ESP32 implementations provide this interface for shared protocol logic.
 

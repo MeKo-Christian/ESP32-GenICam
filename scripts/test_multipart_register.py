@@ -15,12 +15,15 @@ def send_gvcp_read(ip, address):
     sock.settimeout(5)
     
     try:
-        # GVCP READ_MEMORY command
-        cmd = 0x0080  # READ_MEMORY
+        # GVCP READ_MEMORY command (standard Aravis format)
+        packet_type = 0x42  # Command packet
+        packet_flags = 0x00  # No flags
+        cmd = 0x0084  # READ_MEMORY (correct command code)
         length = 0x0002  # 2 words (8 bytes)
         req_id = 0x2000  # Use different ID than enable script
         
-        header = struct.pack('>HHHH', cmd, length, req_id, 0)
+        # Aravis format: [packet_type][packet_flags][command][size][id]
+        header = struct.pack('>BBHHH', packet_type, packet_flags, cmd, length, req_id)
         payload = struct.pack('>II', address, 4)  # address, size
         packet = header + payload
         

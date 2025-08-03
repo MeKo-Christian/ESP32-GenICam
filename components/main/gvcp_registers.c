@@ -53,6 +53,12 @@ static uint32_t stream_dest_address = 0; // 0x0A10 - GevSCDA (destination IP)
 // Stream Channel Configuration (SCCFG) registers - GigE Vision 2.0+
 static uint32_t multipart_config = 0;    // 0x0D24 - SCCFG multipart register (bit 0: multipart enable)
 
+// Stream channel and network interface registers
+static uint32_t stream_channel_count = 1;    // 0x0D00 - Number of stream channels (always 1)
+static uint32_t num_network_interfaces = 1;  // 0x0D04 - Number of network interfaces (always 1)
+static uint32_t scphost_port = 0;            // 0x0D10 - Stream channel host port
+static uint32_t scps_packet_size = 1400;     // 0x0D14 - Stream channel packet size
+
 // Register validation functions
 bool is_register_address_valid(uint32_t address)
 {
@@ -80,8 +86,12 @@ bool is_register_address_valid(uint32_t address)
         return true;
     }
 
-    // Stream Channel Configuration (SCCFG) registers (0x0D24)
-    if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
+    // Stream Channel Configuration (SCCFG) registers (0x0D00-0x0D24)
+    if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
+        address == GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET ||
+        address == GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET ||
+        address == GVCP_GEV_SCPHOST_PORT_OFFSET ||
+        address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
     {
         return true;
     }
@@ -121,9 +131,18 @@ bool is_register_address_writable(uint32_t address)
     }
 
     // Stream Channel Configuration (SCCFG) registers - writable
-    if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
+    if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
+        address == GVCP_GEV_SCPHOST_PORT_OFFSET ||
+        address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
     {
         return true;
+    }
+
+    // Read-only stream channel registers
+    if (address == GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET ||
+        address == GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET)
+    {
+        return false;
     }
 
     return false;
@@ -401,6 +420,22 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     {
         write_register_value(out, multipart_config, size);
     }
+    else if (address == GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET)
+    {
+        write_register_value(out, stream_channel_count, size);
+    }
+    else if (address == GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET)
+    {
+        write_register_value(out, num_network_interfaces, size);
+    }
+    else if (address == GVCP_GEV_SCPHOST_PORT_OFFSET)
+    {
+        write_register_value(out, scphost_port, size);
+    }
+    else if (address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
+    {
+        write_register_value(out, scps_packet_size, size);
+    }
     else
     {
         memset(out, 0, size);
@@ -591,6 +626,27 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         ESP_LOGI(TAG, "Multipart configuration set to: 0x%08x (multipart %s)", 
                  value, (value & 0x1) ? "enabled" : "disabled");
         return ESP_OK;
+    }
+
+    if (address == GVCP_GEV_SCPHOST_PORT_OFFSET)
+    {
+        // Store stream channel host port
+        scphost_port = value;
+        ESP_LOGI(TAG, "Stream channel host port set to: %d", value);
+        return ESP_OK;
+    }
+
+    if (address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
+    {
+        // Validate packet size: must be 576-9000 bytes
+        if (value >= 576 && value <= 9000)
+        {
+            scps_packet_size = value;
+            ESP_LOGI(TAG, "Stream channel packet size set to: %d", value);
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "Invalid stream channel packet size: %d (must be 576-9000)", value);
+        return ESP_FAIL;
     }
 
     // Default: not writable or invalid
@@ -1281,7 +1337,14 @@ esp_err_t gvcp_registers_init(void)
     // Initialize SCCFG registers
     multipart_config = 0; // Multipart disabled by default
 
+    // Initialize stream channel and network interface registers
+    stream_channel_count = 1;       // This device supports 1 stream channel
+    num_network_interfaces = 1;     // This device has 1 network interface (WiFi)
+    scphost_port = 0;              // Default host port (will be set by client)
+    scps_packet_size = 1400;       // Default packet size
+
     ESP_LOGI(TAG, "Register access module initialized with standard GVCP registers and SCCFG support");
+    ESP_LOGI(TAG, "Stream channels: %d, Network interfaces: %d", stream_channel_count, num_network_interfaces);
     return ESP_OK;
 }
 

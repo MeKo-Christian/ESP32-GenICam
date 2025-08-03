@@ -66,6 +66,12 @@
 // Stream Channel Configuration (SCCFG) registers - GigE Vision 2.0+
 #define GVCP_GEVSC_CFG_MULTIPART_OFFSET 0x00000D24     // Stream Channel Configuration Multipart Register (ArvGevSCCFGMultipartReg)
 
+// Stream Channel Count and Network Interface registers (for Aravis compatibility)
+#define GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET 0x00000D00   // Number of stream channels (GevStreamChannelCount)
+#define GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET 0x00000D04 // Number of network interfaces (GevNumberOfNetworkInterfaces)
+#define GVCP_GEV_SCPHOST_PORT_OFFSET 0x00000D10           // Stream Channel Host Port (GevSCPHostPort)
+#define GVCP_GEV_SCPS_PACKET_SIZE_OFFSET 0x00000D14       // Stream Channel Packet Size (GevSCPSPacketSize)
+
 // Register access command handlers
 void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
 void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
