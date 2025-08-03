@@ -19,6 +19,14 @@
 // GVSP Status flags
 #define GVSP_STATUS_SUCCESS 0x0000
 
+// GVSP Payload type flags for multipart support
+#define GVSP_PAYLOAD_TYPE_IMAGE 0x0001
+#define GVSP_PAYLOAD_TYPE_CHUNK_DATA 0x4000
+
+// GVSP Multipart component flags
+#define GVSP_COMPONENT_IMAGE 0x00
+#define GVSP_COMPONENT_METADATA 0x01
+
 // Pixel format codes (GenICam PFNC standard values)
 #define GVSP_PIXEL_MONO8 0x01080001  // Mono8
 #define GVSP_PIXEL_RGB565 0x02100005 // RGB565Packed
@@ -86,6 +94,10 @@ esp_err_t gvsp_force_cleanup(void);
 // Frame ring buffer functions
 uint32_t gvsp_get_frames_stored_in_ring(void);
 esp_err_t gvsp_resend_frame(uint32_t block_id);
+
+// Multipart payload support
+esp_err_t gvsp_send_multipart_frame(local_camera_fb_t *fb);
+esp_err_t gvsp_send_component(local_camera_fb_t *fb, uint8_t component_type, uint16_t component_index);
 
 // Frame sequence tracking functions
 uint32_t gvsp_get_out_of_order_frames(void);

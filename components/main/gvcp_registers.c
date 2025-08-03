@@ -3,6 +3,7 @@
 #include "gvcp_bootstrap.h"
 #include "gvcp_statistics.h"
 #include "gvcp_discovery.h"
+#include "gvcp_handler.h"
 #include "camera_handler.h"
 #include "gvsp_handler.h"
 #include "genicam_xml.h"
@@ -31,7 +32,7 @@ static void write_register_value(uint8_t *dest, uint32_t value, size_t size)
 extern const uint8_t genicam_xml_data[];
 extern const size_t genicam_xml_size;
 
-// Forward declaration of sendto function (to be refactored)
+// External declaration of sendto function
 extern esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
 
 // Stream control parameters
@@ -46,11 +47,11 @@ static uint32_t acquisition_start_reg = 0;
 static uint32_t acquisition_stop_reg = 0;
 
 // Standard GVCP registers for Aravis compatibility
-static uint32_t tl_params_locked = 0;        // 0x0A00 - TLParamsLocked
-static uint32_t stream_dest_address = 0;     // 0x0A10 - GevSCDA (destination IP)
+static uint32_t tl_params_locked = 0;    // 0x0A00 - TLParamsLocked
+static uint32_t stream_dest_address = 0; // 0x0A10 - GevSCDA (destination IP)
 
-// Forward declaration of sendto function (will need to be refactored)
-extern esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
+// Stream Channel Configuration (SCCFG) registers - GigE Vision 2.0+
+static uint32_t multipart_config = 0;    // 0x0D24 - SCCFG multipart register (bit 0: multipart enable)
 
 // Register validation functions
 bool is_register_address_valid(uint32_t address)
@@ -75,6 +76,12 @@ bool is_register_address_valid(uint32_t address)
 
     // Standard GVCP registers (0x0A00-0x0A10 range)
     if (address >= GVCP_TL_PARAMS_LOCKED_OFFSET && address <= GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
+    {
+        return true;
+    }
+
+    // Stream Channel Configuration (SCCFG) registers (0x0D24)
+    if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
     {
         return true;
     }
@@ -109,6 +116,12 @@ bool is_register_address_writable(uint32_t address)
         address == GVCP_GEVSCPS_PACKET_SIZE_OFFSET ||
         address == GVCP_GEVSCPD_PACKET_DELAY_OFFSET ||
         address == GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
+    {
+        return true;
+    }
+
+    // Stream Channel Configuration (SCCFG) registers - writable
+    if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
     {
         return true;
     }
@@ -383,6 +396,11 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     {
         write_register_value(out, gvcp_get_stream_dest_address(), size);
     }
+    // Stream Channel Configuration (SCCFG) registers
+    else if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
+    {
+        write_register_value(out, multipart_config, size);
+    }
     else
     {
         memset(out, 0, size);
@@ -565,6 +583,16 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         return ESP_OK;
     }
 
+    // Stream Channel Configuration (SCCFG) registers
+    if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
+    {
+        // Store multipart configuration (bit 0: enable/disable multipart)
+        multipart_config = value;
+        ESP_LOGI(TAG, "Multipart configuration set to: 0x%08x (multipart %s)", 
+                 value, (value & 0x1) ? "enabled" : "disabled");
+        return ESP_OK;
+    }
+
     // Default: not writable or invalid
     return ESP_FAIL;
 }
@@ -583,10 +611,12 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
 void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr)
 {
     // Enhanced validation
-    uint16_t packet_size = ntohs(header->size);
-    if (packet_size < 8)
+    uint16_t packet_words = ntohs(header->size);
+    uint16_t packet_bytes = packet_words * 4;
+
+    if (packet_bytes < 8)
     {
-        ESP_LOGE(TAG, "Invalid read memory command size: %d", packet_size);
+        ESP_LOGE(TAG, "Invalid read memory command size: %d", packet_bytes);
         gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
         return;
     }
@@ -702,7 +732,7 @@ void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, st
             // Log first few bytes for debugging
             if (xml_read_size >= 16)
             {
-                ESP_LOG_BUFFER_HEX_LEVEL(TAG, data_ptr, 16, ESP_LOG_INFO);
+                PROTOCOL_LOG_BUFFER_HEX(TAG, data_ptr, 16, ESP_LOG_INFO);
             }
         }
         else
@@ -864,16 +894,27 @@ void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, s
 
 void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr)
 {
-    uint16_t header_size = ntohs(header->size);
-    uint16_t header_payload_bytes = header_size; // Size field is already in bytes, not words
+    uint16_t header_size_words = ntohs(header->size);
+    uint16_t header_payload_bytes = header_size_words * 4;
 
-    // Debug logging
-    ESP_LOGI(TAG, "READREG debug: header->size=%d (0x%04x), header_payload_bytes=%d, actual_data_len=%d", 
-             header_size, header_size, header_payload_bytes, data_len);
-    
+    // Enhanced debug logging to understand size field interpretation
+    ESP_LOGI(TAG, "READREG debug: header->size=%d (0x%04x), interpreted as %d bytes, actual_data_len=%d",
+             header_size_words, header_size_words, header_payload_bytes, data_len);
+    ESP_LOGI(TAG, "READREG analysis: if_words=%d bytes, if_bytes=%d bytes, received=%d bytes",
+             header_size_words * 4, header_size_words, data_len);
+
+    // Hex dump of the complete packet for analysis
+    PROTOCOL_LOG_I(TAG, "READREG packet hex dump (header + payload):");
+    PROTOCOL_LOG_BUFFER_HEX(TAG, header, sizeof(gvcp_header_t), ESP_LOG_INFO);
+    if (data && data_len > 0)
+    {
+        PROTOCOL_LOG_I(TAG, "READREG payload hex dump (%d bytes):", data_len);
+        PROTOCOL_LOG_BUFFER_HEX(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
+    }
+
     // Log header contents
     ESP_LOGI(TAG, "READREG header: type=0x%02x, flags=0x%02x, cmd=0x%04x, size=%d, id=0x%04x",
-             header->packet_type, header->packet_flags, ntohs(header->command), 
+             header->packet_type, header->packet_flags, ntohs(header->command),
              ntohs(header->size), ntohs(header->id));
 
     // Use actual received data length instead of header size field
@@ -885,36 +926,41 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int da
     }
 
     // Cross-validate header size field with actual data length
-    if (header_payload_bytes != data_len) {
-        ESP_LOGW(TAG, "READREG size mismatch: header claims %d bytes, received %d bytes", 
+    if (header_payload_bytes != data_len)
+    {
+        ESP_LOGW(TAG, "READREG size mismatch: header claims %d bytes, received %d bytes",
                  header_payload_bytes, data_len);
-    } else {
+    }
+    else
+    {
         ESP_LOGI(TAG, "READREG size validation: header and actual data length match (%d bytes)", data_len);
     }
 
     int num_registers = data_len / 4;
     ESP_LOGI(TAG, "READREG request: %d registers", num_registers);
-    
+
     // Hex dump of payload data for debugging
-    if (data_len > 0) {
-        ESP_LOGI(TAG, "READREG payload hex dump (%d bytes):", data_len);
-        ESP_LOG_BUFFER_HEX_LEVEL(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
+    if (data_len > 0)
+    {
+        PROTOCOL_LOG_I(TAG, "READREG payload hex dump (%d bytes):", data_len);
+        PROTOCOL_LOG_BUFFER_HEX(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
     }
 
     // Validate all addresses first
     for (int i = 0; i < num_registers; i++)
     {
         // Add boundary check before reading
-        if ((i * 4 + 3) >= data_len) {
-            ESP_LOGE(TAG, "READREG: Address read beyond payload boundary at index %d (offset %d >= %d)", 
+        if ((i * 4 + 3) >= data_len)
+        {
+            ESP_LOGE(TAG, "READREG: Address read beyond payload boundary at index %d (offset %d >= %d)",
                      i, i * 4 + 3, data_len);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
         }
-        
+
         uint32_t address = ntohl(((uint32_t *)data)[i]);
-        
-        ESP_LOGI(TAG, "READREG[%d]: parsing offset %d, raw_addr=0x%08x, addr=0x%08x", 
+
+        ESP_LOGI(TAG, "READREG[%d]: parsing offset %d, raw_addr=0x%08x, addr=0x%08x",
                  i, i * 4, ((uint32_t *)data)[i], address);
 
         if (address % 4 != 0)
@@ -953,20 +999,26 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int da
     {
         uint32_t address = ntohl(((uint32_t *)data)[i]);
 
-        // Use internal logic to read register values (already aligned and valid)
-        uint8_t temp[4] = {0};
-        write_register_value(temp, 0, 4); // fallback default
+        // Read register value using internal logic
+        uint8_t register_value[4] = {0};
+        handle_read_memory_cmd_inline(address, 4, register_value);
 
-        // Reuse core read logic for individual registers
-        uint8_t read_data[8];
-        write_register_value(&read_data[0], address, 4);
-        write_register_value(&read_data[4], 4, 4);
+        // Copy the 4-byte register value to response payload
+        memcpy(&payload[i * 4], register_value, 4);
 
-        // You may refactor out the address-based value resolution into a shared function.
-        handle_read_memory_cmd_inline(address, 4, temp);
-
-        memcpy(&payload[i * 4], temp, 4); // Copy 4-byte value
+        ESP_LOGI(TAG, "READREG[%d]: addr=0x%08x, value=0x%08x",
+                 i, address, ntohl(*(uint32_t *)register_value));
     }
+
+    // Log the response packet details before sending
+    PROTOCOL_LOG_I(TAG, "READREG ACK packet: type=0x%02x, cmd=0x%04x, size=%d words, %d registers",
+             ack_header->packet_type, ntohs(ack_header->command), ntohs(ack_header->size), num_registers);
+    PROTOCOL_LOG_I(TAG, "READREG response buffer: allocated=%zu bytes, header=%zu bytes, payload=%d bytes",
+             response_size, sizeof(gvcp_header_t), num_registers * 4);
+
+    // Hex dump the complete response for analysis
+    PROTOCOL_LOG_I(TAG, "READREG complete response hex dump (%zu bytes):", response_size);
+    PROTOCOL_LOG_BUFFER_HEX(TAG, response, response_size, ESP_LOG_INFO);
 
     // Send the response
     esp_err_t err = gvcp_sendto(response, response_size, client_addr);
@@ -979,22 +1031,33 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int da
     }
     else
     {
-        ESP_LOGI(TAG, "Sent READREG ACK with %d registers", num_registers);
+        ESP_LOGI(TAG, "Successfully sent READREG ACK with %d registers", num_registers);
     }
 }
 
 void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr)
 {
     uint16_t header_size = ntohs(header->size);
-    uint16_t header_payload_bytes = header_size; // Size field is already in bytes, not words
+    uint16_t header_payload_bytes = header_size * 4;
 
-    // Debug logging
-    ESP_LOGI(TAG, "WRITEREG debug: header->size=%d (0x%04x), header_payload_bytes=%d, actual_data_len=%d", 
+    // Enhanced debug logging to understand size field interpretation
+    ESP_LOGI(TAG, "WRITEREG debug: header->size=%d (0x%04x), header_payload_bytes=%d, actual_data_len=%d",
              header_size, header_size, header_payload_bytes, data_len);
-    
+    ESP_LOGI(TAG, "WRITEREG analysis: if_words=%d bytes, if_bytes=%d bytes, received=%d bytes",
+             header_size * 4, header_size, data_len);
+
+    // Hex dump of the complete packet for analysis
+    PROTOCOL_LOG_I(TAG, "WRITEREG packet hex dump (header + payload):");
+    PROTOCOL_LOG_BUFFER_HEX(TAG, header, sizeof(gvcp_header_t), ESP_LOG_INFO);
+    if (data && data_len > 0)
+    {
+        PROTOCOL_LOG_I(TAG, "WRITEREG payload hex dump (%d bytes):", data_len);
+        PROTOCOL_LOG_BUFFER_HEX(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
+    }
+
     // Log header contents
     ESP_LOGI(TAG, "WRITEREG header: type=0x%02x, flags=0x%02x, cmd=0x%04x, size=%d, id=0x%04x",
-             header->packet_type, header->packet_flags, ntohs(header->command), 
+             header->packet_type, header->packet_flags, ntohs(header->command),
              ntohs(header->size), ntohs(header->id));
 
     // Use actual received data length instead of header size field
@@ -1006,39 +1069,44 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
     }
 
     // Cross-validate header size field with actual data length
-    if (header_payload_bytes != data_len) {
-        ESP_LOGW(TAG, "WRITEREG size mismatch: header claims %d bytes, received %d bytes", 
+    if (header_payload_bytes != data_len)
+    {
+        ESP_LOGW(TAG, "WRITEREG size mismatch: header claims %d bytes, received %d bytes",
                  header_payload_bytes, data_len);
-    } else {
+    }
+    else
+    {
         ESP_LOGI(TAG, "WRITEREG size validation: header and actual data length match (%d bytes)", data_len);
     }
 
     int num_registers = data_len / 8;
     ESP_LOGI(TAG, "WRITEREG request: %d address-value pairs", num_registers);
-    
+
     // Hex dump of payload data for debugging
-    if (data_len > 0) {
-        ESP_LOGI(TAG, "WRITEREG payload hex dump (%d bytes):", data_len);
-        ESP_LOG_BUFFER_HEX_LEVEL(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
+    if (data_len > 0)
+    {
+        PROTOCOL_LOG_I(TAG, "WRITEREG payload hex dump (%d bytes):", data_len);
+        PROTOCOL_LOG_BUFFER_HEX(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
     }
 
     // Validate all addresses first
     for (int i = 0; i < num_registers; i++)
     {
         // Add boundary check before reading
-        if ((i * 8 + 7) >= data_len) {
-            ESP_LOGE(TAG, "WRITEREG: Address-value pair read beyond payload boundary at index %d (offset %d >= %d)", 
+        if ((i * 8 + 7) >= data_len)
+        {
+            ESP_LOGE(TAG, "WRITEREG: Address-value pair read beyond payload boundary at index %d (offset %d >= %d)",
                      i, i * 8 + 7, data_len);
             gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
             return;
         }
-        
+
         uint32_t address = ntohl(*(uint32_t *)&data[i * 8]);
         uint32_t value = ntohl(*(uint32_t *)&data[i * 8 + 4]);
-        
-        ESP_LOGI(TAG, "WRITEREG[%d]: parsing offset %d, raw_addr=0x%08x, addr=0x%08x, value=0x%08x", 
+
+        ESP_LOGI(TAG, "WRITEREG[%d]: parsing offset %d, raw_addr=0x%08x, addr=0x%08x, value=0x%08x",
                  i, i * 8, *(uint32_t *)&data[i * 8], address, value);
-        
+
         if (address % 4 != 0)
         {
             ESP_LOGW(TAG, "Unaligned register write: 0x%08x", address);
@@ -1098,6 +1166,10 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
         *(uint32_t *)&payload[i * 4] = htonl(address);
     }
 
+    // Log the response packet details before sending
+    PROTOCOL_LOG_I(TAG, "WRITEREG ACK packet: type=0x%02x, cmd=0x%04x, size=%d words, %d registers",
+             ack_header->packet_type, ntohs(ack_header->command), ntohs(ack_header->size), num_registers);
+
     esp_err_t err = gvcp_sendto(response, response_size, client_addr);
     free(response);
     gvsp_update_client_activity();
@@ -1108,7 +1180,7 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
     }
     else
     {
-        ESP_LOGI(TAG, "Sent WRITEREG ACK with %d registers", num_registers);
+        ESP_LOGI(TAG, "Successfully sent WRITEREG ACK with %d registers", num_registers);
     }
 }
 
@@ -1206,6 +1278,39 @@ esp_err_t gvcp_registers_init(void)
     tl_params_locked = 0;
     stream_dest_address = 0;
 
-    ESP_LOGI(TAG, "Register access module initialized with standard GVCP registers");
+    // Initialize SCCFG registers
+    multipart_config = 0; // Multipart disabled by default
+
+    ESP_LOGI(TAG, "Register access module initialized with standard GVCP registers and SCCFG support");
     return ESP_OK;
+}
+
+// Multipart payload control API functions
+bool gvcp_get_multipart_enabled(void)
+{
+    return (multipart_config & 0x1) != 0;
+}
+
+void gvcp_set_multipart_enabled(bool enabled)
+{
+    if (enabled)
+    {
+        multipart_config |= 0x1;  // Set bit 0
+    }
+    else
+    {
+        multipart_config &= ~0x1; // Clear bit 0
+    }
+    ESP_LOGI(TAG, "Multipart payload %s", enabled ? "enabled" : "disabled");
+}
+
+uint32_t gvcp_get_multipart_config(void)
+{
+    return multipart_config;
+}
+
+void gvcp_set_multipart_config(uint32_t config)
+{
+    multipart_config = config;
+    ESP_LOGI(TAG, "Multipart configuration set to: 0x%08x", config);
 }

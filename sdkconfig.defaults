@@ -87,3 +87,6 @@ CONFIG_STATUS_LED_INVERTED=y
 
 # Optional Features - Web Server enabled by default
 CONFIG_ENABLE_WEB_SERVER=y
+
+# Protocol Debug Logging - disabled by default for production
+CONFIG_ENABLE_PROTOCOL_DEBUG_LOGS=n

@@ -63,6 +63,9 @@
 #define GVCP_GEVSCPD_PACKET_DELAY_OFFSET 0x00000A08    // Stream Channel Packet Delay
 #define GVCP_GEVSCDA_DEST_ADDRESS_OFFSET 0x00000A10    // Stream Channel Destination Address
 
+// Stream Channel Configuration (SCCFG) registers - GigE Vision 2.0+
+#define GVCP_GEVSC_CFG_MULTIPART_OFFSET 0x00000D24     // Stream Channel Configuration Multipart Register (ArvGevSCCFGMultipartReg)
+
 // Register access command handlers
 void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
 void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
@@ -87,6 +90,12 @@ uint32_t gvcp_get_tl_params_locked(void);
 void gvcp_set_tl_params_locked(uint32_t locked);
 uint32_t gvcp_get_stream_dest_address(void);
 void gvcp_set_stream_dest_address(uint32_t dest_ip);
+
+// Multipart payload control functions
+bool gvcp_get_multipart_enabled(void);
+void gvcp_set_multipart_enabled(bool enabled);
+uint32_t gvcp_get_multipart_config(void);
+void gvcp_set_multipart_config(uint32_t config);
 
 // Register access initialization
 esp_err_t gvcp_registers_init(void);

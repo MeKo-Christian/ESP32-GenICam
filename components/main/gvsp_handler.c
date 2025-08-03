@@ -1,6 +1,7 @@
 #include "gvsp_handler.h"
 #include "camera_handler.h"
 #include "gvcp_handler.h"
+#include "gvcp_registers.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -81,6 +82,11 @@ static uint32_t total_packets_sent = 0;
 static uint32_t total_packet_errors = 0;
 static uint32_t total_frames_sent = 0;
 static uint32_t total_frame_errors = 0;
+
+// Forward declarations for multipart support functions
+static esp_err_t gvsp_send_leader_packet_multipart(uint32_t frame_size, uint32_t width, uint32_t height, 
+                                                   int pixel_format, uint16_t payload_type, uint16_t component_index);
+static esp_err_t gvsp_send_trailer_packet_multipart(uint32_t height, uint16_t payload_type, uint16_t component_index);
 
 esp_err_t gvsp_init(void)
 {
@@ -578,7 +584,7 @@ static esp_err_t gvsp_send_leader_packet(uint32_t frame_size, uint32_t width, ui
     esp_err_t err = gvsp_send_udp_packet(packet, sizeof(packet), 3);
     if (err == ESP_OK)
     {
-        ESP_LOGD(TAG, "Sent GVSP leader packet (%d bytes)", sizeof(packet));
+        PROTOCOL_LOG_D(TAG, "Sent GVSP leader packet (%d bytes)", sizeof(packet));
     }
 
     return err;
@@ -608,7 +614,7 @@ static esp_err_t gvsp_send_data_packet(const uint8_t *data, uint32_t data_size)
     esp_err_t err = gvsp_send_udp_packet(packet, sizeof(gvsp_header_t) + data_size, 2);
     if (err == ESP_OK)
     {
-        ESP_LOGD(TAG, "Sent GVSP data packet (%d bytes)", sizeof(gvsp_header_t) + data_size);
+        PROTOCOL_LOG_D(TAG, "Sent GVSP data packet (%d bytes)", sizeof(gvsp_header_t) + data_size);
     }
 
     return err;
@@ -641,7 +647,7 @@ static esp_err_t gvsp_send_trailer_packet(uint32_t height)
     esp_err_t err = gvsp_send_udp_packet(packet, sizeof(packet), 3);
     if (err == ESP_OK)
     {
-        ESP_LOGD(TAG, "Sent GVSP trailer packet (%d bytes)", sizeof(packet));
+        PROTOCOL_LOG_D(TAG, "Sent GVSP trailer packet (%d bytes)", sizeof(packet));
     }
 
     return err;
@@ -658,6 +664,13 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
     {
         ESP_LOGE(TAG, "Invalid frame buffer");
         return ESP_ERR_INVALID_ARG;
+    }
+
+    // Check if multipart mode is enabled
+    if (gvcp_get_multipart_enabled())
+    {
+        ESP_LOGI(TAG, "Sending frame in multipart mode");
+        return gvsp_send_multipart_frame(fb);
     }
 
     ESP_LOGI(TAG, "Sending frame: block_id=%d, size=%d, %dx%d",
@@ -1179,4 +1192,178 @@ esp_err_t gvsp_force_cleanup(void)
 
     ESP_LOGI(TAG, "Force cleanup completed");
     return ESP_OK;
+}
+
+// Multipart payload support implementation
+esp_err_t gvsp_send_multipart_frame(local_camera_fb_t *fb)
+{
+    ESP_LOGI(TAG, "Sending multipart frame: block_id=%d, size=%d, %dx%d",
+             block_id, fb->len, fb->width, fb->height);
+
+    // In multipart mode, we send the image as component 0
+    esp_err_t err = gvsp_send_component(fb, GVSP_COMPONENT_IMAGE, 0);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to send image component in multipart frame");
+        return err;
+    }
+
+    // TODO: Add metadata component (component 1) support in future enhancement
+    // For now, just send the image component to demonstrate multipart capability
+    
+    ESP_LOGI(TAG, "Multipart frame sent successfully");
+    return ESP_OK;
+}
+
+esp_err_t gvsp_send_component(local_camera_fb_t *fb, uint8_t component_type, uint16_t component_index)
+{
+    ESP_LOGI(TAG, "Sending component: type=%d, index=%d, size=%d", 
+             component_type, component_index, fb->len);
+
+    // Store frame in ring buffer
+    if (gvsp_store_frame_in_ring(fb, block_id) != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Failed to store frame in ring buffer");
+    }
+
+    // Enhanced payload type for multipart
+    uint16_t payload_type = GVSP_PAYLOAD_TYPE_IMAGE;
+    if (component_type == GVSP_COMPONENT_METADATA)
+    {
+        payload_type = GVSP_PAYLOAD_TYPE_CHUNK_DATA;
+    }
+
+    // Send leader packet with multipart payload type
+    esp_err_t err = gvsp_send_leader_packet_multipart(fb->len, fb->width, fb->height, 
+                                                     fb->format, payload_type, component_index);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to send multipart leader packet");
+        return err;
+    }
+
+    // Send data packets in chunks
+    const uint8_t *data_ptr = fb->buf;
+    uint32_t bytes_sent = 0;
+    uint32_t configured_packet_size = gvcp_get_packet_size();
+    uint32_t packet_delay_us = gvcp_get_packet_delay_us();
+    
+    while (bytes_sent < fb->len)
+    {
+        uint32_t chunk_size = fb->len - bytes_sent;
+        if (chunk_size > configured_packet_size)
+        {
+            chunk_size = configured_packet_size;
+        }
+        err = gvsp_send_data_packet(data_ptr + bytes_sent, chunk_size);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Failed to send data packet at offset %d", bytes_sent);
+            return err;
+        }
+        bytes_sent += chunk_size;
+        
+        // Configurable delay between packets
+        if (packet_delay_us > 0)
+        {
+            vTaskDelay(pdMS_TO_TICKS(packet_delay_us / 1000));
+        }
+    }
+
+    // Send trailer packet with multipart payload type
+    err = gvsp_send_trailer_packet_multipart(fb->height, payload_type, component_index);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to send multipart trailer packet");
+        return err;
+    }
+
+    // Update statistics
+    total_frames_sent++;
+    block_id++;
+
+    return ESP_OK;
+}
+
+// Enhanced leader packet for multipart support
+static esp_err_t gvsp_send_leader_packet_multipart(uint32_t frame_size, uint32_t width, uint32_t height, 
+                                                   int pixel_format, uint16_t payload_type, uint16_t component_index)
+{
+    uint8_t packet[sizeof(gvsp_header_t) + sizeof(gvsp_leader_data_t)];
+    gvsp_header_t *header = (gvsp_header_t *)packet;
+    gvsp_leader_data_t *leader_data = (gvsp_leader_data_t *)(packet + sizeof(gvsp_header_t));
+
+    // GVSP header
+    header->packet_type = GVSP_PACKET_TYPE_LEADER;
+    header->flags = 0;
+    header->packet_id = htons(packet_id++);
+    header->data[0] = htonl(block_id);
+    header->data[1] = htonl(component_index); // Use data[1] for component index in multipart mode
+
+    // Leader data with multipart payload type
+    leader_data->flags = htons(component_index); // Component index in flags field
+    leader_data->payload_type = htons(payload_type); // Multipart payload type
+    
+    // Get current timestamp
+    uint64_t timestamp = esp_timer_get_time();
+    leader_data->timestamp_high = htonl((uint32_t)(timestamp >> 32));
+    leader_data->timestamp_low = htonl((uint32_t)(timestamp & 0xFFFFFFFF));
+    
+    leader_data->pixel_format = htonl(camera_format_to_gvsp_format(pixel_format));
+    leader_data->size_x = htonl(width);
+    leader_data->size_y = htonl(height);
+    leader_data->offset_x = htonl(0);
+    leader_data->offset_y = htonl(0);
+    leader_data->padding_x = htons(0);
+    leader_data->padding_y = htons(0);
+
+    ESP_LOGI(TAG, "Sending multipart leader: payload_type=0x%04x, component=%d, size=%dx%d", 
+             payload_type, component_index, width, height);
+
+    esp_err_t err = gvsp_send_udp_packet(packet, sizeof(packet), 3);
+    if (err == ESP_OK)
+    {
+        total_packets_sent++;
+    }
+    else
+    {
+        total_packet_errors++;
+    }
+
+    return err;
+}
+
+// Enhanced trailer packet for multipart support  
+static esp_err_t gvsp_send_trailer_packet_multipart(uint32_t height, uint16_t payload_type, uint16_t component_index)
+{
+    uint8_t packet[sizeof(gvsp_header_t) + sizeof(gvsp_trailer_data_t)];
+    gvsp_header_t *header = (gvsp_header_t *)packet;
+    gvsp_trailer_data_t *trailer_data = (gvsp_trailer_data_t *)(packet + sizeof(gvsp_header_t));
+
+    // GVSP header
+    header->packet_type = GVSP_PACKET_TYPE_TRAILER;
+    header->flags = 0;
+    header->packet_id = htons(packet_id++);
+    header->data[0] = htonl(block_id);
+    header->data[1] = htonl(component_index); // Component index for multipart
+
+    // Trailer data with multipart payload type
+    trailer_data->reserved = htons(component_index); // Component index in reserved field
+    trailer_data->payload_type = htons(payload_type); // Multipart payload type
+    trailer_data->size_y = htonl(height);
+
+    ESP_LOGI(TAG, "Sending multipart trailer: payload_type=0x%04x, component=%d", 
+             payload_type, component_index);
+
+    esp_err_t err = gvsp_send_udp_packet(packet, sizeof(packet), 3);
+    if (err == ESP_OK)
+    {
+        total_packets_sent++;
+    }
+    else
+    {
+        total_packet_errors++;
+    }
+
+    return err;
 }

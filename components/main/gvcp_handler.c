@@ -123,20 +123,89 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
         return;
     }
 
+    // Log raw packet bytes for debugging command field corruption
+    ESP_LOGI(TAG, "Raw packet (%d bytes): %02x %02x %02x %02x %02x %02x %02x %02x...", 
+             len, packet[0], packet[1], packet[2], packet[3], 
+             packet[4], packet[5], packet[6], packet[7]);
+
+    // Validate packet buffer alignment before casting to header
+    if ((uintptr_t)packet % sizeof(uint16_t) != 0)
+    {
+        ESP_LOGW(TAG, "GVCP packet buffer not aligned for header access");
+    }
+
     gvcp_header_t *header = (gvcp_header_t *)packet;
+
+    // Log raw header fields before byte order conversion for debugging
+    ESP_LOGI(TAG, "Raw header fields - packet_type:0x%02x flags:0x%02x command:0x%04x(raw) size:0x%04x(raw) id:0x%04x(raw)",
+             header->packet_type, header->packet_flags, header->command, header->size, header->id);
+
+    // Extract and validate command field with detailed logging
+    uint16_t command_raw = header->command;
+    uint16_t command = ntohs(header->command);
+    
+    ESP_LOGI(TAG, "Command field: raw=0x%04x -> converted=0x%04x", command_raw, command);
+
+    // Validate command is in expected GVCP range
+    bool valid_command = false;
+    switch (command)
+    {
+        case GVCP_CMD_DISCOVERY:
+        case GVCP_CMD_READ_MEMORY:
+        case GVCP_CMD_WRITE_MEMORY:
+        case GVCP_CMD_READREG:
+        case GVCP_CMD_WRITEREG:
+        case GVCP_CMD_PACKETRESEND:
+            valid_command = true;
+            break;
+        default:
+            ESP_LOGW(TAG, "Unexpected command value 0x%04x - potential corruption or unknown command", command);
+            break;
+    }
+
+    if (!valid_command)
+    {
+        ESP_LOGE(TAG, "COMMAND CORRUPTION DETECTED: 0x%04x is not a valid GVCP command", command);
+        ESP_LOGE(TAG, "Raw bytes at command field offset: packet[2]=0x%02x packet[3]=0x%02x", packet[2], packet[3]);
+        PROTOCOL_LOG_BUFFER_HEX(TAG, packet, MIN(len, 16), ESP_LOG_ERROR);
+    }
+
+    // Add GVCP protocol validation to check size field interpretation
+    if (!gvcp_validate_packet_header(header, len))
+    {
+        uint16_t size_words = ntohs(header->size);
+        uint16_t size_bytes = size_words * 4;
+        size_t expected_len = sizeof(gvcp_header_t) + size_bytes;
+
+        PROTOCOL_LOG_W(TAG, "GVCP packet failed protocol validation - likely size field mismatch");
+        PROTOCOL_LOG_I(TAG, "Packet validation: header.size=%u words (%u bytes), total_len=%d, expected_len=%zu",
+                 size_words, size_bytes, len, expected_len);
+        (void)expected_len; // Suppress unused variable warning when protocol logging disabled
+    }
+
     const uint8_t *data = packet + sizeof(gvcp_header_t);
     int data_len = len - sizeof(gvcp_header_t);
 
-    uint16_t command = ntohs(header->command);
-    ESP_LOGI(TAG, "Received GVCP command: 0x%04x", command);
+    ESP_LOGI(TAG, "Processing GVCP command: 0x%04x", command);
+
+    // Only process valid commands to prevent corruption-induced misbehavior
+    if (!valid_command)
+    {
+        ESP_LOGE(TAG, "Dropping packet with invalid/corrupted command 0x%04x", command);
+        gvcp_increment_unknown_commands();
+        gvcp_send_nack(header, GVCP_ERROR_INVALID_HEADER, client_addr);
+        return;
+    }
 
     switch (command)
     {
     case GVCP_CMD_DISCOVERY:
+        ESP_LOGI(TAG, "Handling DISCOVERY command (0x%04x)", command);
         handle_discovery_cmd(header, client_addr);
         break;
 
     case GVCP_CMD_READ_MEMORY:
+        ESP_LOGI(TAG, "Handling READ_MEMORY command (0x%04x)", command);
         if (data_len >= 8)
         {
             handle_read_memory_cmd(header, data, client_addr);
@@ -149,6 +218,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
         break;
 
     case GVCP_CMD_WRITE_MEMORY:
+        ESP_LOGI(TAG, "Handling WRITE_MEMORY command (0x%04x)", command);
         if (data_len >= 4)
         {
             handle_write_memory_cmd(header, data, client_addr);
@@ -161,6 +231,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
         break;
 
     case GVCP_CMD_READREG:
+        ESP_LOGI(TAG, "Handling READREG command (0x%04x)", command);
         if (data_len >= 4)
         {
             handle_readreg_cmd(header, data, data_len, client_addr);
@@ -173,6 +244,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
         break;
 
     case GVCP_CMD_WRITEREG:
+        ESP_LOGI(TAG, "Handling WRITEREG command (0x%04x)", command);
         if (data_len >= 8)
         {
             handle_writereg_cmd(header, data, data_len, client_addr);
@@ -185,12 +257,14 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
         break;
 
     case GVCP_CMD_PACKETRESEND:
+        ESP_LOGI(TAG, "Handling PACKETRESEND command (0x%04x)", command);
         handle_packetresend_cmd(header, data, client_addr);
         break;
 
     default:
+        // This should never happen due to validation above, but keeping as safety net
         gvcp_increment_unknown_commands();
-        ESP_LOGW(TAG, "Unknown GVCP command: 0x%04x", command);
+        ESP_LOGE(TAG, "BUG: Unknown GVCP command reached default case: 0x%04x (validation failed)", command);
         gvcp_send_nack(header, GVCP_ERROR_NOT_IMPLEMENTED, client_addr);
         break;
     }

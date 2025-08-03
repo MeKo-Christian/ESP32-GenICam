@@ -162,6 +162,34 @@ aravis-viewer:
     @which arv-viewer-0.10 > /dev/null || (echo "❌ arv-viewer-0.10 not found" && exit 1)
     arv-viewer-0.10
 
+# Test multipart payload support (SCCFG register 0x0d24)
+test-multipart-register ip:
+    @python3 scripts/test_multipart_register.py {{ip}}
+
+# Test multipart register with verbose output
+test-multipart-register-verbose ip:
+    @python3 scripts/test_multipart_register.py {{ip}} --verbose
+
+# Test enabling multipart mode
+test-multipart-enable ip:
+    @python3 scripts/test_multipart_enable.py {{ip}} --enable
+
+# Test disabling multipart mode  
+test-multipart-disable ip:
+    @python3 scripts/test_multipart_enable.py {{ip}} --disable
+
+# Check multipart status
+test-multipart-status ip:
+    @python3 scripts/test_multipart_enable.py {{ip}} --status
+
+# Test multipart with Aravis tools
+test-multipart-aravis:
+    @python3 scripts/test_multipart_aravis.py
+
+# Test multipart with Aravis tools (quick discovery only)
+test-multipart-aravis-quick:
+    @python3 scripts/test_multipart_aravis.py --quick
+
 # Run all validation and tests
 test: validate build
     @echo "All tests passed ✅"
@@ -293,6 +321,13 @@ help:
     @echo "  just aravis-test        - Test with Aravis tools"
     @echo "  just aravis-viewer      - Launch Aravis camera viewer"
     @echo "  just integration-test   - Full protocol test suite"
+    @echo "  just test-multipart-register IP - Test SCCFG multipart register (0x0d24)"
+    @echo "  just test-multipart-register-verbose IP - Test multipart register with verbose output"
+    @echo "  just test-multipart-enable IP - Enable multipart mode on device"
+    @echo "  just test-multipart-disable IP - Disable multipart mode on device"
+    @echo "  just test-multipart-status IP - Check current multipart status"
+    @echo "  just test-multipart-aravis - Test multipart features with Aravis"
+    @echo "  just test-multipart-aravis-quick - Quick Aravis multipart discovery test"
     @echo ""
     @echo "Utilities:"
     @echo "  just status             - Show project status"

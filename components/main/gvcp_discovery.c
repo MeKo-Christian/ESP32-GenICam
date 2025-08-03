@@ -2,6 +2,7 @@
 #include "gvcp_bootstrap.h"
 #include "gvcp_protocol.h"
 #include "gvcp_statistics.h"
+#include "gvcp_handler.h"
 #include "gvsp_handler.h"
 #include "esp_log.h"
 #include "esp_chip_info.h"
@@ -83,7 +84,7 @@ void generate_device_uuid(uint8_t *uuid_out, const uint8_t *mac, const char *ser
     uuid_words[3] = htonl(simple_hash(input_buffer, offset, 0x76543210));
 
     ESP_LOGI(TAG, "Generated device UUID from MAC + model + version + chip features");
-    ESP_LOG_BUFFER_HEX_LEVEL(TAG, uuid_out, 16, ESP_LOG_INFO);
+    PROTOCOL_LOG_BUFFER_HEX(TAG, uuid_out, 16, ESP_LOG_INFO);
 }
 
 // Internal function to handle discovery response with flexible header format
@@ -106,7 +107,7 @@ static esp_err_t send_discovery_internal(uint16_t packet_id, struct sockaddr_in 
         uint8_t *bootstrap_memory = get_bootstrap_memory();
         memcpy(&response[sizeof(gvcp_header_t)], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
 
-        ESP_LOGI(TAG, "GigE Vision SPEC: Sending discovery response to %s:%d with packet ID=0x%04x",
+        PROTOCOL_LOG_I(TAG, "GigE Vision SPEC: Sending discovery response to %s:%d with packet ID=0x%04x",
                  ip_str, ntohs(dest_addr->sin_port), ntohs(packet_id));
 
         // Use gvcp_sendto for consistent error handling and socket management
@@ -171,13 +172,13 @@ esp_err_t send_discovery_response(const gvcp_header_t *request_header, struct so
     {
         // Solicited response - echo back the exact packet ID
         packet_id = request_header->id;
-        ESP_LOGI(TAG, "SOLICITED Response: echoing back packet ID=0x%04x", ntohs(packet_id));
+        PROTOCOL_LOG_I(TAG, "SOLICITED Response: echoing back packet ID=0x%04x", ntohs(packet_id));
     }
     else
     {
         // Unsolicited broadcast - use current sequence number (incremented per packet)
         packet_id = htons(discovery_broadcast_sequence & 0xFFFF);
-        ESP_LOGI(TAG, "UNSOLICITED Broadcast: using sequence=%d as unique packet ID=0x%04x",
+        PROTOCOL_LOG_I(TAG, "UNSOLICITED Broadcast: using sequence=%d as unique packet ID=0x%04x",
                  discovery_broadcast_sequence, ntohs(packet_id));
     }
 
@@ -230,7 +231,7 @@ esp_err_t send_discovery_broadcast(void)
         target_addr.sin_port = htons(GVCP_PORT);
         inet_pton(AF_INET, target_ips[i], &target_addr.sin_addr);
 
-        ESP_LOGD(TAG, "Sending discovery announcement to %s (packet ID: %d)", target_ips[i], discovery_broadcast_sequence);
+        PROTOCOL_LOG_D(TAG, "Sending discovery announcement to %s (packet ID: %d)", target_ips[i], discovery_broadcast_sequence);
 
         // Try broadcast with retries for reliability
         esp_err_t result = ESP_FAIL;
@@ -265,7 +266,7 @@ esp_err_t send_discovery_broadcast(void)
     }
     else
     {
-        ESP_LOGI(TAG, "Discovery announcements sent successfully (broadcast cycle #%d, packets %d-%d)",
+        PROTOCOL_LOG_I(TAG, "Discovery announcements sent successfully (broadcast cycle #%d, packets %d-%d)",
                  broadcast_cycle, broadcast_cycle, discovery_broadcast_sequence);
     }
 
