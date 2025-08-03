@@ -51,13 +51,13 @@ static uint32_t tl_params_locked = 0;    // 0x0A00 - TLParamsLocked
 static uint32_t stream_dest_address = 0; // 0x0A10 - GevSCDA (destination IP)
 
 // Stream Channel Configuration (SCCFG) registers - GigE Vision 2.0+
-static uint32_t multipart_config = 0;    // 0x0D24 - SCCFG multipart register (bit 0: multipart enable)
+static uint32_t multipart_config = 0; // 0x0D24 - SCCFG multipart register (bit 0: multipart enable)
 
 // Stream channel and network interface registers
-static uint32_t stream_channel_count = 1;    // 0x0D00 - Number of stream channels (always 1)
-static uint32_t num_network_interfaces = 1;  // 0x0D04 - Number of network interfaces (always 1)
-static uint32_t scphost_port = 0;            // 0x0D10 - Stream channel host port
-static uint32_t scps_packet_size = 1400;     // 0x0D14 - Stream channel packet size
+static uint32_t stream_channel_count = 1;   // 0x0D00 - Number of stream channels (always 1)
+static uint32_t num_network_interfaces = 1; // 0x0D04 - Number of network interfaces (always 1)
+static uint32_t scphost_port = 0;           // 0x0D10 - Stream channel host port
+static uint32_t scps_packet_size = 1400;    // 0x0D14 - Stream channel packet size
 
 // Register validation functions
 bool is_register_address_valid(uint32_t address)
@@ -91,7 +91,11 @@ bool is_register_address_valid(uint32_t address)
         address == GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET ||
         address == GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET ||
         address == GVCP_GEV_SCPHOST_PORT_OFFSET ||
-        address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
+        address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET ||
+        address == GVCP_GEVSCCFG_REGISTER_OFFSET ||
+        address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
+        address == GVCP_GEVSC_CFG_ARAVIS_MULTIPART_OFFSET ||
+        address == GVCP_GEVSC_CFG_CAP_MULTIPART_OFFSET)
     {
         return true;
     }
@@ -130,7 +134,7 @@ bool is_register_address_writable(uint32_t address)
         return true;
     }
 
-    // Stream Channel Configuration (SCCFG) registers - writable
+    // Stream Channel Configuration (SCCFG) registers - writable (multipart enable)
     if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
         address == GVCP_GEV_SCPHOST_PORT_OFFSET ||
         address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
@@ -623,7 +627,7 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
     {
         // Store multipart configuration (bit 0: enable/disable multipart)
         multipart_config = value;
-        ESP_LOGI(TAG, "Multipart configuration set to: 0x%08x (multipart %s)", 
+        ESP_LOGI(TAG, "Multipart configuration set to: 0x%08x (multipart %s)",
                  value, (value & 0x1) ? "enabled" : "disabled");
         return ESP_OK;
     }
@@ -1068,9 +1072,9 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int da
 
     // Log the response packet details before sending
     PROTOCOL_LOG_I(TAG, "READREG ACK packet: type=0x%02x, cmd=0x%04x, size=%d words, %d registers",
-             ack_header->packet_type, ntohs(ack_header->command), ntohs(ack_header->size), num_registers);
+                   ack_header->packet_type, ntohs(ack_header->command), ntohs(ack_header->size), num_registers);
     PROTOCOL_LOG_I(TAG, "READREG response buffer: allocated=%zu bytes, header=%zu bytes, payload=%d bytes",
-             response_size, sizeof(gvcp_header_t), num_registers * 4);
+                   response_size, sizeof(gvcp_header_t), num_registers * 4);
 
     // Hex dump the complete response for analysis
     PROTOCOL_LOG_I(TAG, "READREG complete response hex dump (%zu bytes):", response_size);
@@ -1224,7 +1228,7 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
 
     // Log the response packet details before sending
     PROTOCOL_LOG_I(TAG, "WRITEREG ACK packet: type=0x%02x, cmd=0x%04x, size=%d words, %d registers",
-             ack_header->packet_type, ntohs(ack_header->command), ntohs(ack_header->size), num_registers);
+                   ack_header->packet_type, ntohs(ack_header->command), ntohs(ack_header->size), num_registers);
 
     esp_err_t err = gvcp_sendto(response, response_size, client_addr);
     free(response);
@@ -1338,10 +1342,10 @@ esp_err_t gvcp_registers_init(void)
     multipart_config = 0; // Multipart disabled by default
 
     // Initialize stream channel and network interface registers
-    stream_channel_count = 1;       // This device supports 1 stream channel
-    num_network_interfaces = 1;     // This device has 1 network interface (WiFi)
-    scphost_port = 0;              // Default host port (will be set by client)
-    scps_packet_size = 1400;       // Default packet size
+    stream_channel_count = 1;   // This device supports 1 stream channel
+    num_network_interfaces = 1; // This device has 1 network interface (WiFi)
+    scphost_port = 0;           // Default host port (will be set by client)
+    scps_packet_size = 1400;    // Default packet size
 
     ESP_LOGI(TAG, "Register access module initialized with standard GVCP registers and SCCFG support");
     ESP_LOGI(TAG, "Stream channels: %d, Network interfaces: %d", stream_channel_count, num_network_interfaces);
@@ -1358,7 +1362,7 @@ void gvcp_set_multipart_enabled(bool enabled)
 {
     if (enabled)
     {
-        multipart_config |= 0x1;  // Set bit 0
+        multipart_config |= 0x1; // Set bit 0
     }
     else
     {
