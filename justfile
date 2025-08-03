@@ -154,7 +154,7 @@ aravis-debug:
     @echo "Running Aravis with debug output..."
     @which arv-test-0.10 > /dev/null || (echo "❌ Aravis tools not installed" && exit 1)
     @echo "This will show detailed discovery process..."
-    @timeout 15 arv-test-0.10 --debug=all 2>&1 | head -100
+    @ARV_DEBUG=all timeout 15 arv-test-0.10 --debug=all 2>&1 | head -100
 
 # View discovered cameras with Aravis viewer
 aravis-viewer:
@@ -265,6 +265,11 @@ docs:
     @echo "Project structure:" > docs.txt
     @tree -I 'build|.git' . >> docs.txt 2>/dev/null || ls -la >> docs.txt
     @echo "✅ Documentation generated in docs.txt"
+
+# Kill idf_monitor process
+kill-idf-monitor:
+    @echo "Killing idf_monitor..."
+    @ps -u $USER -f | grep '[e]sp_idf_monitor' | awk '{print $2}' | xargs --no-run-if-empty kill -9
 
 # Run integration test suite (discovery + XML + streaming)
 integration-test:

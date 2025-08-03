@@ -10,20 +10,29 @@
 // --------------------------------------------------------------------------------
 
 #define GVCP_TL_PARAMS_LOCKED_OFFSET 0x00000A00     // Transport Layer Parameters Locked
-#define GVCP_GEVSCPS_PACKET_SIZE_OFFSET 0x00000A04  // Stream Channel Packet Size
-#define GVCP_GEVSCPD_PACKET_DELAY_OFFSET 0x00000A08 // Stream Channel Packet Delay
-#define GVCP_GEVSCDA_DEST_ADDRESS_OFFSET 0x00000A10 // Stream Channel Destination Address
+#define GVCP_GEVSCDA_DEST_ADDRESS_OFFSET 0x00000A10 // GevSCDA (destination IP)
+
+// Timestamp control & value (used e.g. for action commands, time sync)
+#define GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET 0x00000944  // GevTimestampControlLatch
+#define GVCP_GEV_TIMESTAMP_VALUE_HIGH_OFFSET 0x00000948     // GevTimestampLatchedValueHigh
+#define GVCP_GEV_TIMESTAMP_VALUE_LOW_OFFSET 0x0000094C      // GevTimestampLatchedValueLow
+#define GVCP_GEV_TIMESTAMP_TICK_FREQ_HIGH_OFFSET 0x0000093C // GevTimestampTickFrequencyHigh
+#define GVCP_GEV_TIMESTAMP_TICK_FREQ_LOW_OFFSET 0x00000940  // GevTimestampTickFrequencyLow
 
 // --------------------------------------------------------------------------------
-// Stream Channel & Interface Info — Aravis Compatibility / GigE Vision 2.0+
+// Stream Channel & Interface Info — GigE Vision 2.0+ / Aravis Compatibility
 // --------------------------------------------------------------------------------
 
-#define GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET 0x00000D00   // GevStreamChannelCount
-#define GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET 0x00000D04 // GevNumberOfNetworkInterfaces
-#define GVCP_GEV_SCPHOST_PORT_OFFSET 0x00000D10           // GevSCPHostPort
-#define GVCP_GEV_SCPS_PACKET_SIZE_OFFSET 0x00000D14       // GevSCPSPacketSize
+// Number of stream channels and network interfaces
+#define GVCP_GEV_N_STREAM_CHANNELS_OFFSET 0x00000904    // GevStreamChannelCount
+#define GVCP_GEV_N_NETWORK_INTERFACES_OFFSET 0x00000600 // GevNumberOfNetworkInterfaces
 
-#define GVCP_GEVSCCFG_REGISTER_OFFSET 0x00000D20          // GevSCCfg
+// Optional stream config extensions (Aravis-specific multipart and capability bits)
+#define GVCP_GEV_SCP_HOST_PORT_OFFSET 0x00000D00
+#define GVCP_GEV_SCPS_PACKET_SIZE_OFFSET 0x00000D04       // GevSCPS (stream packet size)
+#define GVCP_GEV_SCPD_PACKET_DELAY_OFFSET 0x00000D08      // GevSCPD (stream packet delay)
+#define GVCP_GEV_SCDA_DEST_ADDRESS_OFFSET 0x00000D18      // GevSCDA (see 0x0A10)
+#define GVCP_GEVSCCFG_REGISTER_OFFSET 0x00000D20          // GevSCCfg (stream config flags)
 #define GVCP_GEVSC_CFG_MULTIPART_OFFSET 0x00000D24        // GevSCConfigMultipart
 #define GVCP_GEVSC_CFG_ARAVIS_MULTIPART_OFFSET 0x00000D30 // ArvGevSCCFGMultipartReg
 #define GVCP_GEVSC_CFG_CAP_MULTIPART_OFFSET 0x00000D34    // ArvGevSCCAPMultipartReg

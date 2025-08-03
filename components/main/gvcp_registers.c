@@ -10,6 +10,7 @@
 #include "status_led.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_timer.h"
 #include <sys/param.h>
 #include <string.h>
 #include <arpa/inet.h>
@@ -68,12 +69,17 @@ static uint32_t stream_dest_address = 0; // 0x0A10 - GevSCDA (destination IP)
 
 // Stream Channel Configuration (SCCFG) registers - GigE Vision 2.0+
 static uint32_t multipart_config = 0; // 0x0D24 - SCCFG multipart register (bit 0: multipart enable)
+static uint32_t sccfg_register = 0;   // 0x0D20 - GevSCCfg main configuration register
 
 // Stream channel and network interface registers
 static uint32_t stream_channel_count = 1;   // 0x0D00 - Number of stream channels (always 1)
-static uint32_t num_network_interfaces = 1; // 0x0D04 - Number of network interfaces (always 1)
+static uint32_t num_network_interfaces = 1; // 0x0600 - Number of network interfaces (always 1)
 static uint32_t scphost_port = 0;           // 0x0D10 - Stream channel host port
-static uint32_t scps_packet_size = 1400;    // 0x0D14 - Stream channel packet size
+static uint32_t scps_packet_size = 1400;    // 0x0D04 - Stream channel packet size
+
+// Additional Aravis-specific SCCFG registers
+static uint32_t aravis_multipart_reg = 0; // 0x0D30 - ArvGevSCCFGMultipartReg
+static uint32_t aravis_multipart_cap = 0; // 0x0D34 - ArvGevSCCAPMultipartReg
 
 // Register validation functions
 bool is_register_address_valid(uint32_t address)
@@ -102,11 +108,18 @@ bool is_register_address_valid(uint32_t address)
         return true;
     }
 
+    // GigE Vision Timestamp registers
+    if (address == GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET ||
+        address == GVCP_GEV_TIMESTAMP_VALUE_HIGH_OFFSET)
+    {
+        return true;
+    }
+
     // Stream Channel Configuration (SCCFG) registers (0x0D00-0x0D24)
     if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
-        address == GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET ||
-        address == GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET ||
-        address == GVCP_GEV_SCPHOST_PORT_OFFSET ||
+        address == GVCP_GEV_N_STREAM_CHANNELS_OFFSET ||
+        address == GVCP_GEV_N_NETWORK_INTERFACES_OFFSET ||
+        address == GVCP_GEV_SCP_HOST_PORT_OFFSET ||
         address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET ||
         address == GVCP_GEVSCCFG_REGISTER_OFFSET ||
         address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
@@ -143,8 +156,8 @@ bool is_register_address_writable(uint32_t address)
 
     // Standard GVCP registers - all writable
     if (address == GVCP_TL_PARAMS_LOCKED_OFFSET ||
-        address == GVCP_GEVSCPS_PACKET_SIZE_OFFSET ||
-        address == GVCP_GEVSCPD_PACKET_DELAY_OFFSET ||
+        address == GENICAM_PACKET_SIZE_OFFSET ||
+        address == GENICAM_PACKET_DELAY_OFFSET ||
         address == GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
     {
         return true;
@@ -152,15 +165,15 @@ bool is_register_address_writable(uint32_t address)
 
     // Stream Channel Configuration (SCCFG) registers - writable (multipart enable)
     if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
-        address == GVCP_GEV_SCPHOST_PORT_OFFSET ||
+        address == GVCP_GEV_SCP_HOST_PORT_OFFSET ||
         address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
     {
         return true;
     }
 
     // Read-only stream channel registers
-    if (address == GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET ||
-        address == GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET)
+    if (address == GVCP_GEV_N_STREAM_CHANNELS_OFFSET ||
+        address == GVCP_GEV_N_NETWORK_INTERFACES_OFFSET)
     {
         return false;
     }
@@ -224,6 +237,8 @@ void gvcp_set_stream_dest_address(uint32_t dest_ip)
 // Minimal helper for register-value resolution without sending packets
 static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8_t *out)
 {
+    ESP_LOGI(TAG, "🔍 READ_REG: addr=0x%08x, size=%d", address, size);
+
     if (size < 4 || out == NULL)
     {
         return false;
@@ -243,6 +258,16 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
         else if (address == GVBS_XML_URL_POINTER_OFFSET)
         {
             write_register_value(out, GVBS_XML_URL_0_OFFSET, size);
+        }
+        else if (address == GVCP_GEV_N_NETWORK_INTERFACES_OFFSET)
+        {
+            ESP_LOGI(TAG, "Bootstrap: Reading GevNumberOfNetworkInterfaces (0x%08x): returning %d", address, num_network_interfaces);
+            write_register_value(out, num_network_interfaces, size);
+        }
+        else if (address == GVCP_GEV_N_STREAM_CHANNELS_OFFSET)
+        {
+            ESP_LOGI(TAG, "Bootstrap: Reading GevStreamChannelCount (0x%08x): returning %d", address, stream_channel_count);
+            write_register_value(out, stream_channel_count, size);
         }
         else
         {
@@ -309,7 +334,10 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     }
     else if (address == GENICAM_EXPOSURE_TIME_OFFSET)
     {
-        write_register_value(out, camera_get_exposure_time(), size);
+        // ExposureTime is defined as FloatReg, so convert uint32_t microseconds to float
+        float exposure_float = (float)camera_get_exposure_time(); // Keep in microseconds
+        uint32_t encoded = gvcp_float_to_u32(exposure_float);
+        write_register_value(out, encoded, size);
     }
     else if (address == GENICAM_GAIN_OFFSET)
     {
@@ -424,11 +452,11 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     {
         write_register_value(out, gvcp_get_tl_params_locked(), size);
     }
-    else if (address == GVCP_GEVSCPS_PACKET_SIZE_OFFSET)
+    else if (address == GENICAM_PACKET_SIZE_OFFSET)
     {
         write_register_value(out, packet_size, size);
     }
-    else if (address == GVCP_GEVSCPD_PACKET_DELAY_OFFSET)
+    else if (address == GENICAM_PACKET_DELAY_OFFSET)
     {
         write_register_value(out, packet_delay_us, size);
     }
@@ -437,19 +465,26 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
         write_register_value(out, gvcp_get_stream_dest_address(), size);
     }
     // Stream Channel Configuration (SCCFG) registers
+    else if (address == GVCP_GEVSCCFG_REGISTER_OFFSET)
+    {
+        ESP_LOGI(TAG, "Reading GevSCCfg (0x%08x): returning 0x%08x", address, sccfg_register);
+        write_register_value(out, sccfg_register, size);
+    }
     else if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
     {
         write_register_value(out, multipart_config, size);
     }
-    else if (address == GVCP_GEV_STREAM_CHANNEL_COUNT_OFFSET)
+    else if (address == GVCP_GEV_N_STREAM_CHANNELS_OFFSET)
     {
+        ESP_LOGI(TAG, "Reading GevStreamChannelCount (0x%08x): returning %d", address, stream_channel_count);
         write_register_value(out, stream_channel_count, size);
     }
-    else if (address == GVCP_GEV_NUM_NETWORK_INTERFACES_OFFSET)
+    else if (address == GVCP_GEV_N_NETWORK_INTERFACES_OFFSET)
     {
+        ESP_LOGI(TAG, "Reading GevNumberOfNetworkInterfaces (0x%08x): returning %d", address, num_network_interfaces);
         write_register_value(out, num_network_interfaces, size);
     }
-    else if (address == GVCP_GEV_SCPHOST_PORT_OFFSET)
+    else if (address == GVCP_GEV_SCP_HOST_PORT_OFFSET)
     {
         write_register_value(out, scphost_port, size);
     }
@@ -457,9 +492,52 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     {
         write_register_value(out, scps_packet_size, size);
     }
+    else if (address == GVCP_GEV_TIMESTAMP_TICK_FREQ_HIGH_OFFSET)
+    {
+        // Return 1 MHz (1000000 Hz) tick frequency for ESP32 microsecond timer resolution
+        uint32_t tick_frequency = 1000000;
+        ESP_LOGI(TAG, "Reading GevTimestampTickFrequency (0x%08x): returning %d Hz", address, tick_frequency);
+        write_register_value(out, tick_frequency, size);
+    }
+    else if (address == GVCP_GEVSC_CFG_ARAVIS_MULTIPART_OFFSET)
+    {
+        ESP_LOGI(TAG, "Reading ArvGevSCCFGMultipartReg (0x%08x): returning 0x%08x", address, aravis_multipart_reg);
+        write_register_value(out, aravis_multipart_reg, size);
+    }
+    else if (address == GVCP_GEVSC_CFG_CAP_MULTIPART_OFFSET)
+    {
+        ESP_LOGI(TAG, "Reading ArvGevSCCAPMultipartReg (0x%08x): returning 0x%08x", address, aravis_multipart_cap);
+        write_register_value(out, aravis_multipart_cap, size);
+    }
+    else if (address == GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET)
+    {
+        // GevTimestampControlLatch: return 0 (no latching behavior implemented)
+        uint32_t timestamp_control = 0;
+        ESP_LOGI(TAG, "Reading GevTimestampControlLatch (0x%08x): returning %d", address, timestamp_control);
+        write_register_value(out, timestamp_control, size);
+    }
+    else if (address == GVCP_GEV_TIMESTAMP_VALUE_HIGH_OFFSET)
+    {
+        // GevTimestampValue: return current timestamp in microseconds (aligned with tick frequency)
+        uint64_t timestamp_us = esp_timer_get_time();
+        uint32_t timestamp_value = (uint32_t)(timestamp_us & 0xFFFFFFFF); // Use lower 32 bits
+        ESP_LOGI(TAG, "Reading GevTimestampValue (0x%08x): returning %u us", address, timestamp_value);
+        write_register_value(out, timestamp_value, size);
+    }
     else
     {
+        ESP_LOGW(TAG, "🔍 READ_REG: UNKNOWN addr=0x%08x - returning zeros", address);
         memset(out, 0, size);
+    }
+
+    // Return success for all handled register addresses above
+    return true;
+
+    // Log the returned value for debugging
+    if (size >= 4)
+    {
+        uint32_t returned_value = ntohl(*(uint32_t *)out);
+        ESP_LOGI(TAG, "🔍 READ_REG: addr=0x%08x -> value=0x%08x", address, returned_value);
     }
 
     return true;
@@ -467,6 +545,7 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
 
 static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value)
 {
+    ESP_LOGI(TAG, "✍️ WRITE_REG: addr=0x%08x, value=0x%08x", address, value);
     // Bootstrap writable register: User-defined name (example range)
     if (address >= GVBS_USER_DEFINED_NAME_OFFSET &&
         address + 4 <= GVBS_USER_DEFINED_NAME_OFFSET + 16)
@@ -562,13 +641,33 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
     // Exposure time
     if (address == GENICAM_EXPOSURE_TIME_OFFSET)
     {
-        return camera_set_exposure_time(value);
+        // ExposureTime is defined as FloatReg, so convert float to uint32_t microseconds
+        float exposure_float = gvcp_u32_to_float(value);
+        if (exposure_float >= 100.0f && exposure_float <= 1000000.0f) // 100us to 1s range
+        {
+            ESP_LOGI(TAG, "Set exposure_time to %.1f us", exposure_float);
+            return camera_set_exposure_time((uint32_t)exposure_float);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Invalid exposure time: %.1f us (must be between 100-1000000)", exposure_float);
+            return ESP_ERR_INVALID_ARG;
+        }
     }
 
     // Gain
     if (address == GENICAM_GAIN_OFFSET)
     {
-        return camera_set_gain((int)value);
+        if (value >= 0 && value <= 30) // Valid gain range 0-30 dB
+        {
+            ESP_LOGI(TAG, "Set gain to %d dB", value);
+            return camera_set_gain((int)value);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Invalid gain: %d dB (must be between 0-30)", value);
+            return ESP_ERR_INVALID_ARG;
+        }
     }
 
     // Brightness
@@ -622,7 +721,7 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         return ESP_OK;
     }
 
-    if (address == GVCP_GEVSCPS_PACKET_SIZE_OFFSET)
+    if (address == GENICAM_PACKET_SIZE_OFFSET)
     {
         // Validate packet size: must be 576-9000 bytes and aligned to 128 bytes
         if (value >= 576 && value <= 9000 && (value % 128) == 0)
@@ -634,7 +733,7 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         return ESP_FAIL;
     }
 
-    if (address == GVCP_GEVSCPD_PACKET_DELAY_OFFSET)
+    if (address == GENICAM_PACKET_DELAY_OFFSET)
     {
         // Map GVCP ticks to microseconds - assuming 1:1 mapping for simplicity
         packet_delay_us = value;
@@ -659,7 +758,7 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         return ESP_OK;
     }
 
-    if (address == GVCP_GEV_SCPHOST_PORT_OFFSET)
+    if (address == GVCP_GEV_SCP_HOST_PORT_OFFSET)
     {
         // Store stream channel host port
         scphost_port = value;
@@ -1367,12 +1466,17 @@ esp_err_t gvcp_registers_init(void)
 
     // Initialize SCCFG registers
     multipart_config = 0; // Multipart disabled by default
+    sccfg_register = 0;   // Main stream channel configuration register
 
     // Initialize stream channel and network interface registers
     stream_channel_count = 1;   // This device supports 1 stream channel
     num_network_interfaces = 1; // This device has 1 network interface (WiFi)
     scphost_port = 0;           // Default host port (will be set by client)
     scps_packet_size = 1400;    // Default packet size
+
+    // Initialize Aravis-specific SCCFG registers
+    aravis_multipart_reg = 0; // Aravis multipart configuration
+    aravis_multipart_cap = 0; // Aravis multipart capabilities
 
     ESP_LOGI(TAG, "Register access module initialized with standard GVCP registers and SCCFG support");
     ESP_LOGI(TAG, "Stream channels: %d, Network interfaces: %d", stream_channel_count, num_network_interfaces);

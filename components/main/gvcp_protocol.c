@@ -59,6 +59,33 @@ esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *cli
     }
 }
 
+uint16_t gvcp_get_ack_command(uint16_t cmd_command)
+{
+    // Convert network byte order to host byte order for comparison
+    uint16_t host_cmd = ntohs(cmd_command);
+
+    switch (host_cmd)
+    {
+    case GVCP_CMD_DISCOVERY:
+        return htons(GVCP_ACK_DISCOVERY);
+    case GVCP_CMD_PACKETRESEND:
+        return htons(GVCP_ACK_PACKETRESEND);
+    case GVCP_CMD_READREG:
+        return htons(GVCP_ACK_READREG);
+    case GVCP_CMD_WRITEREG:
+        return htons(GVCP_ACK_WRITEREG);
+    case GVCP_CMD_READ_MEMORY:
+        return htons(GVCP_ACK_READ_MEMORY);
+    case GVCP_CMD_WRITE_MEMORY:
+        return htons(GVCP_ACK_WRITE_MEMORY);
+    default:
+        // For unknown commands, return the original command
+        // This maintains backward compatibility
+        ESP_LOGW(TAG, "Unknown command 0x%04x, using original in NACK", host_cmd);
+        return cmd_command;
+    }
+}
+
 esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, struct sockaddr_in *client_addr)
 {
     if (original_header == NULL || client_addr == NULL)
@@ -72,16 +99,16 @@ esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_co
     // Create NACK response header
     nack_header->packet_type = GVCP_PACKET_TYPE_ERROR;
     nack_header->packet_flags = 0;
-    nack_header->command = original_header->command;   // Echo back original command
-    nack_header->size = htons(GVCP_BYTES_TO_WORDS(2)); // Error code size in 32-bit words (2 bytes = 1 word)
-    nack_header->id = original_header->id;             // Echo back packet ID
+    nack_header->command = gvcp_get_ack_command(original_header->command); // Use corresponding ACK command
+    nack_header->size = htons(2);                                          // Error code size (2 bytes)
+    nack_header->id = original_header->id;                                 // Echo back packet ID
 
     // Add error code
     *(uint16_t *)&response[sizeof(gvcp_header_t)] = htons(error_code);
 
     // Log NACK packet details before sending
-    ESP_LOGW(TAG, "NACK packet: type=0x%02x (ERROR), cmd=0x%04x, error_code=0x%04x",
-             nack_header->packet_type, ntohs(original_header->command), error_code);
+    ESP_LOGW(TAG, "NACK packet: type=0x%02x (ERROR), orig_cmd=0x%04x, ack_cmd=0x%04x, error_code=0x%04x",
+             nack_header->packet_type, ntohs(original_header->command), ntohs(nack_header->command), error_code);
 
     // Send NACK response
     esp_err_t err = gvcp_sendto(response, sizeof(response), client_addr);
@@ -94,8 +121,8 @@ esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_co
     else
     {
         gvcp_increment_total_errors();
-        ESP_LOGW(TAG, "Successfully sent NACK response for command 0x%04x with error code 0x%04x",
-                 ntohs(original_header->command), error_code);
+        ESP_LOGW(TAG, "Successfully sent NACK response for command 0x%04x→0x%04x with error code 0x%04x",
+                 ntohs(original_header->command), ntohs(nack_header->command), error_code);
         return ESP_OK;
     }
 }

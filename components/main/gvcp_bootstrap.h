@@ -30,7 +30,7 @@
 #define GVBS_DEVICE_CAPABILITIES_OFFSET 0x00000010     // Device capabilities
 
 // Standard GigE Vision control registers
-#define GVBS_HEARTBEAT_TIMEOUT_OFFSET 0x00000934       // Heartbeat timeout (ms)
+#define GVBS_HEARTBEAT_TIMEOUT_OFFSET 0x00000934 // Heartbeat timeout (ms)
 
 // Device information constants
 #define DEVICE_MANUFACTURER "ESP32GenICam"
@@ -38,13 +38,13 @@
 #define DEVICE_VERSION "1.0.0"
 #define DEVICE_SERIAL "ESP32CAM001"
 #define DEVICE_USER_NAME "ESP32Camera"
-#define XML_URL "Local:camera.xml;0x10000;0x2000"
+#define XML_URL "Local:camera.xml;0x10000;0x3A00"
 
 // XML memory mapping
 #define XML_BASE_ADDRESS 0x10000
 
 // Bootstrap memory needs to be large enough to hold heartbeat register at 0x934 + 4 bytes
-#define BOOTSTRAP_MEMORY_SIZE (0x940)
+#define BOOTSTRAP_MEMORY_SIZE (0x938)
 
 // Bootstrap register management
 esp_err_t gvcp_bootstrap_init(void);
