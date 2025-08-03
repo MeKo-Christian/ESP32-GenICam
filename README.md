@@ -146,6 +146,17 @@ Works with existing GenICam/GigE Vision applications:
 | No images | GVSP streaming | `just capture-packets`, check acquisition |
 | Build issues | Dependencies, WiFi config | `just setup`, `just wifi-config` |
 
+### Firewall Configuration
+
+For proper discovery functionality, ensure your firewall allows the required UDP traffic:
+
+```bash
+# Allow incoming UDP traffic for GenICam discovery and streaming
+sudo ufw allow in proto udp from any port 3956 to any port 30000:60000
+```
+
+**Why this is crucial**: GenICam discovery uses UDP port 3956 for control (GVCP) and dynamic ports in the range 30000-60000 for streaming (GVSP). Without this firewall rule, discovery packets and image streams will be blocked.
+
 ### Discovery Proxy (WiFi Broadcast Failsafe)
 
 If Aravis cannot discover the ESP32-CAM due to WiFi broadcast limitations:
