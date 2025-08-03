@@ -131,6 +131,9 @@ void init_bootstrap_memory(void)
     strncpy((char *)&bootstrap_memory[GVBS_XML_URL_0_OFFSET], XML_URL, xml_url_max_size - 1);
     bootstrap_memory[GVBS_XML_URL_0_OFFSET + xml_url_max_size - 1] = '\0'; // Ensure null termination
 
+    // Aravis fallback XML URL addresses
+    snprintf((char *)&bootstrap_memory[0x400], BOOTSTRAP_MEMORY_SIZE - 0x400, XML_URL);
+
     ESP_LOGI(TAG, "Bootstrap memory initialized");
 }
 

@@ -26,7 +26,7 @@ GVCP_PORT = 3956
 GVCP_PACKET_TYPE_CMD = 0x42
 GVCP_PACKET_TYPE_ACK = 0x00
 GVCP_CMD_DISCOVERY = 0x0002
-GVCP_ACK_DISCOVERY = 0x0002
+GVCP_ACK_DISCOVERY = 0x0003
 
 # GigE Vision Discovery Response Constants
 GVCP_DISCOVERY_PAYLOAD_SIZE = 568    # Expected payload size in bytes
@@ -37,13 +37,13 @@ def create_gvcp_discovery_packet():
     """Create a proper GVCP discovery command packet."""
     # GVCP header structure (8 bytes total):
     # uint8_t packet_type;    (0x42 for command)
-    # uint8_t packet_flags;   (0x00 for discovery)
+    # uint8_t packet_flags;   (0x01 for discovery)
     # uint16_t command;       (0x0002 for discovery, network byte order)
     # uint16_t size;          (0x0000 for discovery - no payload, network byte order)
     # uint16_t id;            (packet ID, network byte order)
     
     packet_type = GVCP_PACKET_TYPE_CMD
-    packet_flags = 0x00
+    packet_flags = 0x01
     command = GVCP_CMD_DISCOVERY
     size = 0x0000  # Discovery command has no payload
     packet_id = 0x1234  # Arbitrary packet ID
@@ -76,7 +76,7 @@ def parse_gvcp_response(data, expected_id):
     }
     
     # Validate response
-    if packet_type == GVCP_PACKET_TYPE_ACK and command == GVCP_CMD_DISCOVERY:
+    if packet_type == GVCP_PACKET_TYPE_ACK and command == GVCP_ACK_DISCOVERY:
         # Validate packet ID
         if packet_id != expected_id:
             return response_info, f"Packet ID mismatch: got 0x{packet_id:04x}, expected 0x{expected_id:04x}"

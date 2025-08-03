@@ -98,7 +98,9 @@ static esp_err_t send_discovery_internal(uint16_t packet_id, struct sockaddr_in 
         uint8_t response[sizeof(gvcp_header_t) + GVBS_DISCOVERY_DATA_SIZE];
         gvcp_header_t *ack_header = (gvcp_header_t *)response;
 
-        gvcp_create_ack_header(ack_header, NULL, GVCP_ACK_DISCOVERY, GVBS_DISCOVERY_DATA_SIZE);
+        uint16_t discovery_data_size_in_words = GVBS_DISCOVERY_DATA_SIZE / 4;
+        gvcp_create_ack_header(ack_header, NULL, GVCP_ACK_DISCOVERY, discovery_data_size_in_words);
+        ack_header->id = packet_id;
 
         // Copy bootstrap data
         uint8_t *bootstrap_memory = get_bootstrap_memory();

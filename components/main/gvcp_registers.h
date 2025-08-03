@@ -57,6 +57,12 @@
 #define GENICAM_DISCOVERY_BROADCAST_FAILURES_OFFSET 0x000010BC
 #define GENICAM_DISCOVERY_BROADCAST_SEQUENCE_OFFSET 0x000010C0
 
+// Standard GigE Vision GVCP registers (for Aravis compatibility)
+#define GVCP_TL_PARAMS_LOCKED_OFFSET 0x00000A00        // Transport Layer Parameters Locked
+#define GVCP_GEVSCPS_PACKET_SIZE_OFFSET 0x00000A04     // Stream Channel Packet Size
+#define GVCP_GEVSCPD_PACKET_DELAY_OFFSET 0x00000A08    // Stream Channel Packet Delay
+#define GVCP_GEVSCDA_DEST_ADDRESS_OFFSET 0x00000A10    // Stream Channel Destination Address
+
 // Register access command handlers
 void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
 void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
@@ -75,6 +81,12 @@ uint32_t gvcp_get_packet_delay_us(void);
 uint32_t gvcp_get_frame_rate_fps(void);
 uint32_t gvcp_get_packet_size(void);
 void gvcp_set_stream_status(uint32_t status);
+
+// Standard GVCP register management functions
+uint32_t gvcp_get_tl_params_locked(void);
+void gvcp_set_tl_params_locked(uint32_t locked);
+uint32_t gvcp_get_stream_dest_address(void);
+void gvcp_set_stream_dest_address(uint32_t dest_ip);
 
 // Register access initialization
 esp_err_t gvcp_registers_init(void);

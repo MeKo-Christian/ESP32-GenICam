@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """
 Test script to verify bootstrap register access and packet type fixes.
-Tests the key registers that Aravis would access.
+Tests the key registers that Aravis would access, including failsafe XML URL locations.
+
+GenICam failsafe mechanism:
+- Primary XML URL at 0x220 (GVBS_XML_URL_0_OFFSET) 
+- Failsafe XML URL at 0x400 (backup location)
+- Both should point to "Local:0x10000" where the XML data is stored
 """
 
 import socket
 import struct
 import sys
 
-def read_memory(sock, target_ip, address, size, packet_id=0x1234):
+def read_memory(sock, target_ip, address, size, packet_id=0x1234, as_string=False):
     """Send READ_MEMORY command and return response."""
     
     # Create READ_MEMORY packet
-    command = 0x0080  # READ_MEMORY
+    command = 0x0084  # READ_MEMORY
     payload = struct.pack('>II', address, size)  # address, size
     
     # GVCP header: type, flags, command, size, id
@@ -30,13 +35,18 @@ def read_memory(sock, target_ip, address, size, packet_id=0x1234):
             packet_type, flags, cmd, size_resp, resp_id = struct.unpack('>BBHHH', response[:8])
             print(f"   Header: type=0x{packet_type:02x}, cmd=0x{cmd:04x}, size={size_resp}")
             
-            if packet_type == 0x43:  # ACK
+            if packet_type == 0x00:
                 if len(response) >= 12:  # Header + address
                     addr_resp = struct.unpack('>I', response[8:12])[0]
                     payload = response[12:]
                     print(f"   ✅ ACK: addr=0x{addr_resp:08x}, payload={len(payload)} bytes")
                     
-                    if len(payload) >= 4:
+                    if as_string and len(payload) > 0:
+                        # Decode as string
+                        string_value = payload.decode('utf-8', errors='ignore').rstrip('\x00')
+                        print(f"   📝 String: '{string_value}'")
+                        return string_value
+                    elif len(payload) >= 4:
                         value = struct.unpack('>I', payload[:4])[0]
                         print(f"   💾 Value: 0x{value:08x} ({value})")
                         return value
@@ -75,6 +85,7 @@ def test_bootstrap_registers(target_ip):
         (0x00000068, "Model name"),
         (0x00000200, "Control Channel Privilege"),
         (0x00000220, "XML URL string"),
+        (0x00000400, "XML URL failsafe location"),
     ]
     
     try:
@@ -89,14 +100,31 @@ def test_bootstrap_registers(target_ip):
                         print("   ✅ Correct! Points to XML URL string location")
                     else:
                         print("   ⚠️  Unexpected pointer value")
+            elif address == 0x00000200:  # Control Channel Privilege
+                if value is not None:
+                    print(f"   🔐 Control Channel Privilege: 0x{value:08x}")
+                    if value == 0x200:
+                        print("   ✅ Standard Aravis privilege value (0x200)")
+                    else:
+                        print(f"   ℹ️  Non-standard privilege value")
                         
         # Test actual XML URL reading
         print(f"\n📋 Testing XML URL string reading")
-        value = read_memory(sock, target_ip, 0x220, 32)  # Read first 32 bytes of URL
+        url_value = read_memory(sock, target_ip, 0x220, 32, as_string=True)  # Read first 32 bytes of URL
+        
+        # Test failsafe XML URL reading
+        print(f"\n📋 Testing XML URL failsafe string reading (0x400)")
+        failsafe_value = read_memory(sock, target_ip, 0x400, 32, as_string=True)  # Read first 32 bytes of failsafe URL
+        if failsafe_value:
+            print(f"   ✅ Failsafe XML URL: '{failsafe_value}'")
+            if failsafe_value.startswith("local:0x10000") or failsafe_value.startswith("Local:0x10000"):
+                print("   ✅ Failsafe URL correctly points to XML memory location")
+            else:
+                print("   ⚠️  Unexpected failsafe URL format")
         
         # Test XML data reading 
         print(f"\n📋 Testing XML data reading (from 0x10000)")
-        xml_value = read_memory(sock, target_ip, 0x10000, 64)  # Read first 64 bytes of XML
+        xml_value = read_memory(sock, target_ip, 0x10000, 64, as_string=True)  # Read first 64 bytes of XML
         
     except Exception as e:
         print(f"❌ Error: {e}")

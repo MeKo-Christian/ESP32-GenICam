@@ -6,8 +6,8 @@ import argparse
 import time
 
 GVCP_PORT = 3956
-READMEM_CMD = 0x0080
-READMEM_ACK = 0x0081
+READMEM_CMD = 0x0084
+READMEM_ACK = 0x0085
 
 def read_mem(ip, address, size, packet_id=0x4321):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -30,7 +30,7 @@ def read_mem(ip, address, size, packet_id=0x4321):
         pt, pf, cmd, size_words, resp_id = struct.unpack('>BBHHH', data[:8])
         payload = data[8:]
 
-        if pt != 0x43 or cmd != READMEM_ACK or resp_id != packet_id:
+        if cmd != READMEM_ACK or resp_id != packet_id:
             raise Exception(f"Unexpected response: type=0x{pt:02x}, cmd=0x{cmd:04x}, id=0x{resp_id:04x}")
 
         print(f"✓ READMEM_ACK received ({len(payload)} bytes)")

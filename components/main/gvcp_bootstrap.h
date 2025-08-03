@@ -35,13 +35,13 @@
 #define DEVICE_VERSION "1.0.0"
 #define DEVICE_SERIAL "ESP32CAM001"
 #define DEVICE_USER_NAME "ESP32Camera"
-#define XML_URL "Local:0x10000;0x2000"
+#define XML_URL "Local:camera.xml;0x10000;0x2000"
 
 // XML memory mapping
 #define XML_BASE_ADDRESS 0x10000
 
 // Bootstrap memory needs to be large enough to hold XML URL at offset 0x220 + URL size
-#define BOOTSTRAP_MEMORY_SIZE 0x320
+#define BOOTSTRAP_MEMORY_SIZE (0x400 + 0x200)
 
 // Bootstrap register management
 esp_err_t gvcp_bootstrap_init(void);

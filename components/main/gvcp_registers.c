@@ -45,6 +45,10 @@ static uint32_t acquisition_mode = 0; // 0 = Continuous
 static uint32_t acquisition_start_reg = 0;
 static uint32_t acquisition_stop_reg = 0;
 
+// Standard GVCP registers for Aravis compatibility
+static uint32_t tl_params_locked = 0;        // 0x0A00 - TLParamsLocked
+static uint32_t stream_dest_address = 0;     // 0x0A10 - GevSCDA (destination IP)
+
 // Forward declaration of sendto function (will need to be refactored)
 extern esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
 
@@ -65,6 +69,12 @@ bool is_register_address_valid(uint32_t address)
 
     // GenICam registers
     if (address >= GENICAM_ACQUISITION_START_OFFSET && address <= GENICAM_DISCOVERY_BROADCAST_SEQUENCE_OFFSET)
+    {
+        return true;
+    }
+
+    // Standard GVCP registers (0x0A00-0x0A10 range)
+    if (address >= GVCP_TL_PARAMS_LOCKED_OFFSET && address <= GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
     {
         return true;
     }
@@ -90,6 +100,15 @@ bool is_register_address_writable(uint32_t address)
     // Discovery broadcast control registers
     if (address == GENICAM_DISCOVERY_BROADCAST_ENABLE_OFFSET ||
         address == GENICAM_DISCOVERY_BROADCAST_INTERVAL_OFFSET)
+    {
+        return true;
+    }
+
+    // Standard GVCP registers - all writable
+    if (address == GVCP_TL_PARAMS_LOCKED_OFFSET ||
+        address == GVCP_GEVSCPS_PACKET_SIZE_OFFSET ||
+        address == GVCP_GEVSCPD_PACKET_DELAY_OFFSET ||
+        address == GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
     {
         return true;
     }
@@ -127,6 +146,27 @@ uint32_t gvcp_get_packet_size(void)
 void gvcp_set_stream_status(uint32_t status)
 {
     stream_status = status;
+}
+
+// Standard GVCP register getter/setter functions
+uint32_t gvcp_get_tl_params_locked(void)
+{
+    return tl_params_locked;
+}
+
+void gvcp_set_tl_params_locked(uint32_t locked)
+{
+    tl_params_locked = locked;
+}
+
+uint32_t gvcp_get_stream_dest_address(void)
+{
+    return stream_dest_address;
+}
+
+void gvcp_set_stream_dest_address(uint32_t dest_ip)
+{
+    stream_dest_address = dest_ip;
 }
 
 // Minimal helper for register-value resolution without sending packets
@@ -326,6 +366,23 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     {
         write_register_value(out, gvcp_get_discovery_broadcast_sequence(), size);
     }
+    // Standard GVCP registers
+    else if (address == GVCP_TL_PARAMS_LOCKED_OFFSET)
+    {
+        write_register_value(out, gvcp_get_tl_params_locked(), size);
+    }
+    else if (address == GVCP_GEVSCPS_PACKET_SIZE_OFFSET)
+    {
+        write_register_value(out, packet_size, size);
+    }
+    else if (address == GVCP_GEVSCPD_PACKET_DELAY_OFFSET)
+    {
+        write_register_value(out, packet_delay_us, size);
+    }
+    else if (address == GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
+    {
+        write_register_value(out, gvcp_get_stream_dest_address(), size);
+    }
     else
     {
         memset(out, 0, size);
@@ -471,6 +528,40 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
     if (address == GENICAM_DISCOVERY_BROADCAST_INTERVAL_OFFSET)
     {
         gvcp_set_discovery_broadcast_interval(value);
+        return ESP_OK;
+    }
+
+    // Standard GVCP registers
+    if (address == GVCP_TL_PARAMS_LOCKED_OFFSET)
+    {
+        gvcp_set_tl_params_locked(value);
+        return ESP_OK;
+    }
+
+    if (address == GVCP_GEVSCPS_PACKET_SIZE_OFFSET)
+    {
+        // Validate packet size: must be 576-9000 bytes and aligned to 128 bytes
+        if (value >= 576 && value <= 9000 && (value % 128) == 0)
+        {
+            packet_size = value;
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "Invalid packet size: %d (must be 576-9000 and 128-byte aligned)", value);
+        return ESP_FAIL;
+    }
+
+    if (address == GVCP_GEVSCPD_PACKET_DELAY_OFFSET)
+    {
+        // Map GVCP ticks to microseconds - assuming 1:1 mapping for simplicity
+        packet_delay_us = value;
+        return ESP_OK;
+    }
+
+    if (address == GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
+    {
+        // Store destination IP address (in network byte order)
+        gvcp_set_stream_dest_address(value);
+        ESP_LOGI(TAG, "Stream destination address set to: 0x%08x", value);
         return ESP_OK;
     }
 
@@ -1037,6 +1128,10 @@ esp_err_t gvcp_registers_init(void)
     acquisition_start_reg = 0;
     acquisition_stop_reg = 0;
 
-    ESP_LOGI(TAG, "Register access module initialized");
+    // Initialize standard GVCP registers
+    tl_params_locked = 0;
+    stream_dest_address = 0;
+
+    ESP_LOGI(TAG, "Register access module initialized with standard GVCP registers");
     return ESP_OK;
 }
