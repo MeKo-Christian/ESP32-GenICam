@@ -98,7 +98,7 @@ static esp_err_t send_discovery_internal(uint16_t packet_id, struct sockaddr_in 
         uint8_t response[sizeof(gvcp_header_t) + GVBS_DISCOVERY_DATA_SIZE];
         gvcp_header_t *ack_header = (gvcp_header_t *)response;
 
-        gvcp_create_response_header(ack_header, NULL, GVCP_ACK_DISCOVERY, GVCP_BYTES_TO_WORDS(GVBS_DISCOVERY_DATA_SIZE));
+        gvcp_create_ack_header(ack_header, NULL, GVCP_ACK_DISCOVERY, GVBS_DISCOVERY_DATA_SIZE);
 
         // Copy bootstrap data
         uint8_t *bootstrap_memory = get_bootstrap_memory();
@@ -137,7 +137,7 @@ static esp_err_t send_discovery_internal(uint16_t packet_id, struct sockaddr_in 
         // These magic bytes identify the packet as GigE Vision format for client compatibility
         response[0] = 0x42;                             // 'B' - GigE Vision magic byte 1
         response[1] = 0x45;                             // 'E' - GigE Vision magic byte 2
-        response[2] = GVCP_PACKET_TYPE;                 // 0x42
+        response[2] = GVCP_PACKET_TYPE_ACK;             // 0x00
         response[3] = GVCP_PACKET_FLAG_ACK;             // 0x01
         response[4] = (GVCP_ACK_DISCOVERY >> 8) & 0xFF; // Command high byte
         response[5] = GVCP_ACK_DISCOVERY & 0xFF;        // Command low byte

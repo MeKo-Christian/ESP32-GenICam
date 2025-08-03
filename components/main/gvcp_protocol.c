@@ -101,19 +101,20 @@ bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len)
     if (header == NULL)
         return false;
 
-    // Minimum valid GVCP packet is just the header
     if (packet_len < sizeof(gvcp_header_t))
         return false;
 
-    // GVCP packets must always use the standard packet type (0x42)
-    if (header->packet_type != GVCP_PACKET_TYPE)
+    // Allow known packet types
+    switch (header->packet_type)
+    {
+    case 0x42: // Command
+    case 0x00: // ACK
+    case 0x80: // NACK/Error
+        break;
+    default:
         return false;
+    }
 
-    // Optional strict packet_flags check — allow only 0x00 (CMD) or 0x01 (ACK)
-    if ((header->packet_flags & ~GVCP_PACKET_FLAG_ACK) != 0)
-        return false;
-
-    // Size field is in 32-bit words; validate it matches actual payload length
     uint16_t payload_size_bytes = ntohs(header->size) * 4;
     if ((size_t)packet_len != sizeof(gvcp_header_t) + payload_size_bytes)
         return false;
@@ -121,17 +122,30 @@ bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len)
     return true;
 }
 
-void gvcp_create_response_header(gvcp_header_t *response, const gvcp_header_t *request, uint16_t response_command, uint16_t response_size_words)
+void gvcp_create_command_header(gvcp_header_t *cmd, uint16_t command_code, uint16_t size_words, uint16_t packet_id, bool ack_required)
 {
-    if (response == NULL)
+    if (!cmd)
         return;
 
-    response->packet_type = GVCP_PACKET_TYPE;
-    response->packet_flags = GVCP_PACKET_FLAG_ACK;
-    response->command = htons(response_command);
-    response->size = htons(response_size_words);
+    cmd->packet_type = GVCP_PACKET_TYPE_CMD;
+    cmd->packet_flags = ack_required ? GVCP_FLAGS_ACK_REQUIRED : 0x00;
+    cmd->command = htons(command_code);
+    cmd->size = htons(size_words);
+    cmd->id = htons(packet_id);
+}
 
-    // Only copy ID if request is present
+void gvcp_create_ack_header(gvcp_header_t *ack, const gvcp_header_t *request, uint16_t ack_code, uint16_t size_words)
+{
+    if (!ack)
+        return;
+
+    ack->packet_type = GVCP_PACKET_TYPE_ACK;
+    ack->packet_flags = 0x00;
+    ack->command = htons(ack_code);
+    ack->size = htons(size_words);
+
     if (request)
-        response->id = request->id;
+        ack->id = request->id;
+    else
+        ack->id = 0; // fallback; optional
 }

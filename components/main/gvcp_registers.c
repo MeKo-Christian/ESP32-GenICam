@@ -570,7 +570,7 @@ void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, st
 
     // Initialize response header
     gvcp_header_t *ack_header = (gvcp_header_t *)response;
-    gvcp_create_response_header(ack_header, header, GVCP_ACK_READ_MEMORY, GVCP_BYTES_TO_WORDS(4 + size));
+    gvcp_create_ack_header(ack_header, header, GVCP_ACK_READ_MEMORY, GVCP_BYTES_TO_WORDS(4 + size));
 
     // Copy address back
     write_register_value(&response[sizeof(gvcp_header_t)], address, 4);
@@ -713,7 +713,7 @@ void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, s
             uint8_t response[sizeof(gvcp_header_t) + 4];
 
             gvcp_header_t *ack_header = (gvcp_header_t *)response;
-            gvcp_create_response_header(ack_header, header, GVCP_ACK_WRITE_MEMORY, GVCP_BYTES_TO_WORDS(4));
+            gvcp_create_ack_header(ack_header, header, GVCP_ACK_WRITE_MEMORY, GVCP_BYTES_TO_WORDS(4));
 
             *(uint32_t *)&response[sizeof(gvcp_header_t)] = htonl(address);
 
@@ -746,7 +746,7 @@ void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, s
         uint8_t response[sizeof(gvcp_header_t) + 4];
 
         gvcp_header_t *ack_header = (gvcp_header_t *)response;
-        gvcp_create_response_header(ack_header, header, GVCP_ACK_WRITE_MEMORY, GVCP_BYTES_TO_WORDS(4));
+        gvcp_create_ack_header(ack_header, header, GVCP_ACK_WRITE_MEMORY, GVCP_BYTES_TO_WORDS(4));
 
         *(uint32_t *)&response[sizeof(gvcp_header_t)] = htonl(address);
 
@@ -817,7 +817,7 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, struct
     }
 
     gvcp_header_t *ack_header = (gvcp_header_t *)response;
-    gvcp_create_response_header(ack_header, header, GVCP_ACK_READREG, num_registers);
+    gvcp_create_ack_header(ack_header, header, GVCP_ACK_READREG, num_registers);
 
     uint8_t *payload = response + sizeof(gvcp_header_t);
 
@@ -923,7 +923,7 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, struc
     }
 
     gvcp_header_t *ack_header = (gvcp_header_t *)response;
-    gvcp_create_response_header(ack_header, header, GVCP_ACK_WRITEREG, num_registers);
+    gvcp_create_ack_header(ack_header, header, GVCP_ACK_WRITEREG, num_registers);
 
     // Copy addresses into response payload
     uint8_t *payload = response + sizeof(gvcp_header_t);
@@ -1003,7 +1003,7 @@ void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, s
     gvcp_header_t *ack_header = (gvcp_header_t *)response;
 
     // Create ACK response header
-    gvcp_create_response_header(ack_header, header, GVCP_ACK_PACKETRESEND, GVCP_BYTES_TO_WORDS(8));
+    gvcp_create_ack_header(ack_header, header, GVCP_ACK_PACKETRESEND, GVCP_BYTES_TO_WORDS(8));
 
     // Echo back the resend parameters
     write_register_value(&response[sizeof(gvcp_header_t)], stream_channel_index, 4);
