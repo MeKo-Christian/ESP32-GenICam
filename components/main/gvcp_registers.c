@@ -862,25 +862,60 @@ void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, s
     gvcp_send_nack(header, GVCP_ERROR_INVALID_ADDRESS, client_addr);
 }
 
-void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr)
+void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr)
 {
-    uint16_t packet_size = ntohs(header->size);
-    uint16_t payload_bytes = packet_size * 4;
+    uint16_t header_size = ntohs(header->size);
+    uint16_t header_payload_bytes = header_size; // Size field is already in bytes, not words
 
-    if (data == NULL || payload_bytes == 0 || payload_bytes % 4 != 0)
+    // Debug logging
+    ESP_LOGI(TAG, "READREG debug: header->size=%d (0x%04x), header_payload_bytes=%d, actual_data_len=%d", 
+             header_size, header_size, header_payload_bytes, data_len);
+    
+    // Log header contents
+    ESP_LOGI(TAG, "READREG header: type=0x%02x, flags=0x%02x, cmd=0x%04x, size=%d, id=0x%04x",
+             header->packet_type, header->packet_flags, ntohs(header->command), 
+             ntohs(header->size), ntohs(header->id));
+
+    // Use actual received data length instead of header size field
+    if (data == NULL || data_len == 0 || data_len % 4 != 0)
     {
-        ESP_LOGE(TAG, "Invalid READREG packet: size=%d bytes", payload_bytes);
+        ESP_LOGE(TAG, "Invalid READREG packet: data_len=%d bytes (must be multiple of 4)", data_len);
         gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
         return;
     }
 
-    int num_registers = payload_bytes / 4;
+    // Cross-validate header size field with actual data length
+    if (header_payload_bytes != data_len) {
+        ESP_LOGW(TAG, "READREG size mismatch: header claims %d bytes, received %d bytes", 
+                 header_payload_bytes, data_len);
+    } else {
+        ESP_LOGI(TAG, "READREG size validation: header and actual data length match (%d bytes)", data_len);
+    }
+
+    int num_registers = data_len / 4;
     ESP_LOGI(TAG, "READREG request: %d registers", num_registers);
+    
+    // Hex dump of payload data for debugging
+    if (data_len > 0) {
+        ESP_LOGI(TAG, "READREG payload hex dump (%d bytes):", data_len);
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
+    }
 
     // Validate all addresses first
     for (int i = 0; i < num_registers; i++)
     {
+        // Add boundary check before reading
+        if ((i * 4 + 3) >= data_len) {
+            ESP_LOGE(TAG, "READREG: Address read beyond payload boundary at index %d (offset %d >= %d)", 
+                     i, i * 4 + 3, data_len);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+        
         uint32_t address = ntohl(((uint32_t *)data)[i]);
+        
+        ESP_LOGI(TAG, "READREG[%d]: parsing offset %d, raw_addr=0x%08x, addr=0x%08x", 
+                 i, i * 4, ((uint32_t *)data)[i], address);
 
         if (address % 4 != 0)
         {
@@ -908,7 +943,8 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, struct
     }
 
     gvcp_header_t *ack_header = (gvcp_header_t *)response;
-    gvcp_create_ack_header(ack_header, header, GVCP_ACK_READREG, num_registers);
+    // Pass payload size in words (using GVCP_BYTES_TO_WORDS macro for consistency)
+    gvcp_create_ack_header(ack_header, header, GVCP_ACK_READREG, GVCP_BYTES_TO_WORDS(num_registers * 4));
 
     uint8_t *payload = response + sizeof(gvcp_header_t);
 
@@ -950,7 +986,7 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, struct
 void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr)
 {
     uint16_t header_size = ntohs(header->size);
-    uint16_t header_payload_bytes = header_size * 4;
+    uint16_t header_payload_bytes = header_size; // Size field is already in bytes, not words
 
     // Debug logging
     ESP_LOGI(TAG, "WRITEREG debug: header->size=%d (0x%04x), header_payload_bytes=%d, actual_data_len=%d", 
@@ -973,10 +1009,8 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
     if (header_payload_bytes != data_len) {
         ESP_LOGW(TAG, "WRITEREG size mismatch: header claims %d bytes, received %d bytes", 
                  header_payload_bytes, data_len);
-        // Use the smaller value to be safe
-        if (header_payload_bytes > data_len) {
-            ESP_LOGW(TAG, "Header claims more data than received, using actual data length");
-        }
+    } else {
+        ESP_LOGI(TAG, "WRITEREG size validation: header and actual data length match (%d bytes)", data_len);
     }
 
     int num_registers = data_len / 8;
@@ -1053,7 +1087,8 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
     }
 
     gvcp_header_t *ack_header = (gvcp_header_t *)response;
-    gvcp_create_ack_header(ack_header, header, GVCP_ACK_WRITEREG, num_registers);
+    // Pass payload size in words (using GVCP_BYTES_TO_WORDS macro for consistency)
+    gvcp_create_ack_header(ack_header, header, GVCP_ACK_WRITEREG, GVCP_BYTES_TO_WORDS(num_registers * 4));
 
     // Copy addresses into response payload
     uint8_t *payload = response + sizeof(gvcp_header_t);

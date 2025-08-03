@@ -29,6 +29,9 @@
 #define GVBS_LINK_SPEED_OFFSET 0x0000002C              // Link speed in Mbps
 #define GVBS_DEVICE_CAPABILITIES_OFFSET 0x00000010     // Device capabilities
 
+// Standard GigE Vision control registers
+#define GVBS_HEARTBEAT_TIMEOUT_OFFSET 0x00000934       // Heartbeat timeout (ms)
+
 // Device information constants
 #define DEVICE_MANUFACTURER "ESP32GenICam"
 #define DEVICE_MODEL "ESP32-CAM-GigE"
@@ -40,8 +43,8 @@
 // XML memory mapping
 #define XML_BASE_ADDRESS 0x10000
 
-// Bootstrap memory needs to be large enough to hold XML URL at offset 0x220 + URL size
-#define BOOTSTRAP_MEMORY_SIZE (0x400 + 0x200)
+// Bootstrap memory needs to be large enough to hold heartbeat register at 0x934 + 4 bytes
+#define BOOTSTRAP_MEMORY_SIZE (0x940)
 
 // Bootstrap register management
 esp_err_t gvcp_bootstrap_init(void);

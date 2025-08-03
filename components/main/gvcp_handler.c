@@ -163,7 +163,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
     case GVCP_CMD_READREG:
         if (data_len >= 4)
         {
-            handle_readreg_cmd(header, data, client_addr);
+            handle_readreg_cmd(header, data, data_len, client_addr);
         }
         else
         {

@@ -134,7 +134,11 @@ void init_bootstrap_memory(void)
     // Aravis fallback XML URL addresses
     snprintf((char *)&bootstrap_memory[0x400], BOOTSTRAP_MEMORY_SIZE - 0x400, XML_URL);
 
-    ESP_LOGI(TAG, "Bootstrap memory initialized");
+    // Heartbeat timeout register (ms) - default 3000ms (3 seconds)
+    // This register tells Aravis how often to send heartbeat messages
+    write_register_value(&bootstrap_memory[GVBS_HEARTBEAT_TIMEOUT_OFFSET], 3000, 4);
+
+    ESP_LOGI(TAG, "Bootstrap memory initialized with heartbeat timeout 3000ms");
 }
 
 uint8_t *get_bootstrap_memory(void)

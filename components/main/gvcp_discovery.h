@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define GVBS_DISCOVERY_DATA_SIZE     0x238  // GigE Vision spec: 568 bytes payload (576 total - 8 header)
+#define GVBS_DISCOVERY_DATA_SIZE 0xF8
 
 // Discovery broadcast management
 void gvcp_enable_discovery_broadcast(bool enable);
