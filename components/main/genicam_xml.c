@@ -299,7 +299,7 @@ const uint8_t genicam_xml_data[] =
     "\n"
     "	<IntReg Name=\"GevStreamChannelCountReg\" NameSpace=\"Standard\">\n"
     "		<Description>Number of stream channels supported.</Description>\n"
-    "		<Address>0x0D00</Address>\n"
+    "		<Address>0x0904</Address>\n"
     "		<Length>4</Length>\n"
     "		<AccessMode>RO</AccessMode>\n"
     "		<pPort>Stream0</pPort>\n"
