@@ -175,7 +175,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
     case GVCP_CMD_WRITEREG:
         if (data_len >= 8)
         {
-            handle_writereg_cmd(header, data, client_addr);
+            handle_writereg_cmd(header, data, data_len, client_addr);
         }
         else
         {

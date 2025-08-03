@@ -947,25 +947,64 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, struct
     }
 }
 
-void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr)
+void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr)
 {
-    uint16_t packet_size = ntohs(header->size);
-    uint16_t payload_bytes = packet_size * 4;
+    uint16_t header_size = ntohs(header->size);
+    uint16_t header_payload_bytes = header_size * 4;
 
-    if (data == NULL || payload_bytes == 0 || payload_bytes % 8 != 0)
+    // Debug logging
+    ESP_LOGI(TAG, "WRITEREG debug: header->size=%d (0x%04x), header_payload_bytes=%d, actual_data_len=%d", 
+             header_size, header_size, header_payload_bytes, data_len);
+    
+    // Log header contents
+    ESP_LOGI(TAG, "WRITEREG header: type=0x%02x, flags=0x%02x, cmd=0x%04x, size=%d, id=0x%04x",
+             header->packet_type, header->packet_flags, ntohs(header->command), 
+             ntohs(header->size), ntohs(header->id));
+
+    // Use actual received data length instead of header size field
+    if (data == NULL || data_len == 0 || data_len % 8 != 0)
     {
-        ESP_LOGE(TAG, "Invalid WRITEREG packet: size=%d bytes", payload_bytes);
+        ESP_LOGE(TAG, "Invalid WRITEREG packet: data_len=%d bytes (must be multiple of 8)", data_len);
         gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
         return;
     }
 
-    int num_registers = payload_bytes / 8;
+    // Cross-validate header size field with actual data length
+    if (header_payload_bytes != data_len) {
+        ESP_LOGW(TAG, "WRITEREG size mismatch: header claims %d bytes, received %d bytes", 
+                 header_payload_bytes, data_len);
+        // Use the smaller value to be safe
+        if (header_payload_bytes > data_len) {
+            ESP_LOGW(TAG, "Header claims more data than received, using actual data length");
+        }
+    }
+
+    int num_registers = data_len / 8;
     ESP_LOGI(TAG, "WRITEREG request: %d address-value pairs", num_registers);
+    
+    // Hex dump of payload data for debugging
+    if (data_len > 0) {
+        ESP_LOGI(TAG, "WRITEREG payload hex dump (%d bytes):", data_len);
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, data, MIN(data_len, 64), ESP_LOG_INFO);
+    }
 
     // Validate all addresses first
     for (int i = 0; i < num_registers; i++)
     {
+        // Add boundary check before reading
+        if ((i * 8 + 7) >= data_len) {
+            ESP_LOGE(TAG, "WRITEREG: Address-value pair read beyond payload boundary at index %d (offset %d >= %d)", 
+                     i, i * 8 + 7, data_len);
+            gvcp_send_nack(header, GVCP_ERROR_INVALID_PARAMETER, client_addr);
+            return;
+        }
+        
         uint32_t address = ntohl(*(uint32_t *)&data[i * 8]);
+        uint32_t value = ntohl(*(uint32_t *)&data[i * 8 + 4]);
+        
+        ESP_LOGI(TAG, "WRITEREG[%d]: parsing offset %d, raw_addr=0x%08x, addr=0x%08x, value=0x%08x", 
+                 i, i * 8, *(uint32_t *)&data[i * 8], address, value);
+        
         if (address % 4 != 0)
         {
             ESP_LOGW(TAG, "Unaligned register write: 0x%08x", address);

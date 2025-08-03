@@ -67,7 +67,7 @@
 void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
 void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
 void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
-void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr);
 void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
 
 // Register validation and utility functions
