@@ -17,6 +17,22 @@
 
 static const char *TAG = "gvcp_registers";
 
+// Helper function to convert uint32_t to float
+static inline float gvcp_u32_to_float(uint32_t raw_value)
+{
+    float result;
+    memcpy(&result, &raw_value, sizeof(result));
+    return result;
+}
+
+// Helper function to convert float to uint32_t
+static inline uint32_t gvcp_float_to_u32(float value)
+{
+    uint32_t raw;
+    memcpy(&raw, &value, sizeof(raw));
+    return raw;
+}
+
 // Helper function to write register values with proper byte order
 static void write_register_value(uint8_t *dest, uint32_t value, size_t size)
 {
@@ -37,7 +53,7 @@ extern esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_
 
 // Stream control parameters
 static uint32_t packet_delay_us = 1000; // Inter-packet delay in microseconds (default 1ms)
-static uint32_t frame_rate_fps = 1;     // Frame rate in FPS (default 1 FPS)
+static float frame_rate_fps = 1.0f;     // Frame rate in FPS (default 1 FPS)
 static uint32_t packet_size = 1400;     // Data packet size (default 1400)
 static uint32_t stream_status = 0;      // Stream status register
 
@@ -169,7 +185,7 @@ uint32_t gvcp_get_packet_delay_us(void)
     return packet_delay_us;
 }
 
-uint32_t gvcp_get_frame_rate_fps(void)
+float gvcp_get_frame_rate_fps(void)
 {
     return frame_rate_fps;
 }
@@ -272,7 +288,8 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     }
     else if (address == GENICAM_FRAME_RATE_OFFSET)
     {
-        write_register_value(out, frame_rate_fps, size);
+        uint32_t encoded = gvcp_float_to_u32(frame_rate_fps);
+        write_register_value(out, encoded, size);
     }
     else if (address == GENICAM_PACKET_SIZE_OFFSET)
     {
@@ -512,11 +529,21 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         return ESP_OK;
     }
 
-    // Frame rate
-    if (address == GENICAM_FRAME_RATE_OFFSET && value >= 1 && value <= 30)
+    // Frame rate (FloatReg: 0x00001014)
+    if (address == GENICAM_FRAME_RATE_OFFSET)
     {
-        frame_rate_fps = value;
-        return ESP_OK;
+        float fps = gvcp_u32_to_float(value);
+        if (fps >= 1.0f && fps <= 30.0f)
+        {
+            ESP_LOGI(TAG, "Set frame_rate_fps to %.2f", fps);
+            frame_rate_fps = fps;
+            return ESP_OK;
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Invalid frame_rate_fps: %.2f (must be between 1 and 30)", fps);
+            return ESP_ERR_INVALID_ARG;
+        }
     }
 
     // Packet size
@@ -1325,7 +1352,7 @@ esp_err_t gvcp_registers_init(void)
 {
     // Initialize stream parameters
     packet_delay_us = 1000;
-    frame_rate_fps = 1;
+    frame_rate_fps = 15.0;
     packet_size = 1400;
     stream_status = 0;
 

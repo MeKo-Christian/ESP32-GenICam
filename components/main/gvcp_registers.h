@@ -103,7 +103,7 @@ bool is_genicam_register(uint32_t address);
 
 // Stream configuration getter functions
 uint32_t gvcp_get_packet_delay_us(void);
-uint32_t gvcp_get_frame_rate_fps(void);
+float gvcp_get_frame_rate_fps(void);
 uint32_t gvcp_get_packet_size(void);
 void gvcp_set_stream_status(uint32_t status);
 
