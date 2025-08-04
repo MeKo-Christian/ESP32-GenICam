@@ -1,10 +1,13 @@
 #pragma once
 
-// Include all modular GVCP components
-#include "gvcp_protocol.h"
-#include "gvcp_discovery.h"
-#include "gvcp_bootstrap.h"
-#include "gvcp_registers.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+// Include abstracted GVCP components
+#include "gvcp/protocol.h"
+#include "gvcp/discovery.h"
+#include "gvcp/bootstrap.h"
+#include "genicam/registers.h"
 #include "gvcp_statistics.h"
 
 // Protocol debug logging macros

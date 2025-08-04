@@ -1,7 +1,7 @@
 #include "gvsp_handler.h"
 #include "camera_handler.h"
 #include "gvcp_handler.h"
-#include "gvcp_registers.h"
+#include "genicam/registers.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -102,7 +102,7 @@ esp_err_t gvsp_init(void)
         ESP_LOGE(TAG, "Unable to create GVSP socket: errno %d", errno);
         return ESP_FAIL;
     }
-    PROTOCOL_LOG_I(TAG, "GVSP socket created");
+    ESP_LOGI(TAG, "GVSP socket created");
 
     int err = bind(gvsp_sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err < 0)
@@ -112,7 +112,7 @@ esp_err_t gvsp_init(void)
         gvsp_sock = -1;
         return ESP_FAIL;
     }
-    PROTOCOL_LOG_I(TAG, "GVSP socket bound to port %d", GVSP_PORT);
+    ESP_LOGI(TAG, "GVSP socket bound to port %d", GVSP_PORT);
 
     // Configure socket send buffer for ESP32 memory constraints
     int send_buffer_size = 8192; // 8KB send buffer for ESP32
@@ -122,7 +122,7 @@ esp_err_t gvsp_init(void)
     }
     else
     {
-        PROTOCOL_LOG_I(TAG, "GVSP socket send buffer configured to %d bytes", send_buffer_size);
+        ESP_LOGI(TAG, "GVSP socket send buffer configured to %d bytes", send_buffer_size);
     }
 
     // Configure socket receive buffer (for potential future use)
@@ -133,7 +133,7 @@ esp_err_t gvsp_init(void)
     }
     else
     {
-        PROTOCOL_LOG_I(TAG, "GVSP socket receive buffer configured to %d bytes", recv_buffer_size);
+        ESP_LOGI(TAG, "GVSP socket receive buffer configured to %d bytes", recv_buffer_size);
     }
 
     // Set GVSP socket active bit in connection status
@@ -237,7 +237,7 @@ static esp_err_t gvsp_recreate_socket(void)
     last_socket_recreation = current_time;
     gvcp_set_connection_status_bit(1, true); // Set GVSP socket active bit
 
-    PROTOCOL_LOG_I(TAG, "GVSP socket successfully recreated and bound to port %d", GVSP_PORT);
+    ESP_LOGI(TAG, "GVSP socket successfully recreated and bound to port %d", GVSP_PORT);
     return ESP_OK;
 }
 
@@ -324,7 +324,7 @@ static esp_err_t gvsp_get_frame_from_ring(uint32_t block_id, local_camera_fb_t *
             fb_out->height = frame_ring[i].height;
 
             xSemaphoreGive(frame_ring_mutex);
-            PROTOCOL_LOG_I(TAG, "Retrieved frame with block_id %d from ring buffer", block_id);
+            ESP_LOGI(TAG, "Retrieved frame with block_id %d from ring buffer", block_id);
             return ESP_OK;
         }
     }
@@ -355,7 +355,7 @@ static void gvsp_clear_frame_ring(void)
         frame_ring_head = 0;
         frames_stored = 0;
         xSemaphoreGive(frame_ring_mutex);
-        PROTOCOL_LOG_I(TAG, "Frame ring buffer cleared");
+        ESP_LOGI(TAG, "Frame ring buffer cleared");
     }
     else
     {
@@ -376,7 +376,7 @@ static esp_err_t gvsp_validate_frame_sequence(uint32_t received_sequence)
     {
         expected_frame_sequence = received_sequence + 1;
         last_received_sequence = received_sequence;
-        PROTOCOL_LOG_I(TAG, "Frame sequence tracking started at sequence %d", received_sequence);
+        ESP_LOGI(TAG, "Frame sequence tracking started at sequence %d", received_sequence);
         return ESP_OK;
     }
 
@@ -428,7 +428,7 @@ static void gvsp_reset_sequence_tracking(void)
     out_of_order_frames = 0;
     lost_frames = 0;
     duplicate_frames = 0;
-    PROTOCOL_LOG_I(TAG, "Frame sequence tracking reset");
+    ESP_LOGI(TAG, "Frame sequence tracking reset");
 }
 
 esp_err_t gvsp_start_streaming(void)
@@ -445,7 +445,7 @@ esp_err_t gvsp_start_streaming(void)
     // Reset sequence tracking when starting streaming
     gvsp_reset_sequence_tracking();
 
-    PROTOCOL_LOG_I(TAG, "GVSP streaming started");
+    ESP_LOGI(TAG, "GVSP streaming started");
 
     xSemaphoreGive(streaming_mutex);
     return ESP_OK;
@@ -468,9 +468,9 @@ esp_err_t gvsp_stop_streaming(void)
     gvsp_clear_frame_ring();
 
     // Update stream status
-    gvcp_set_stream_status(0x0000); // Clear all status bits
+    genicam_registers_set_stream_status(0x0000); // Clear all status bits
 
-    PROTOCOL_LOG_I(TAG, "GVSP streaming stopped and cleaned up");
+    ESP_LOGI(TAG, "GVSP streaming stopped and cleaned up");
 
     xSemaphoreGive(streaming_mutex);
     return ESP_OK;
@@ -505,7 +505,7 @@ static esp_err_t gvsp_send_udp_packet(const uint8_t *packet, size_t packet_size,
     {
         char addr_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(client_addr.sin_addr), addr_str, INET_ADDRSTRLEN);
-        PROTOCOL_LOG_I(TAG, "Sending UDP packet: size=%zu, dest=%s:%d, socket=%d, retry_count=%d", 
+        ESP_LOGI(TAG, "Sending UDP packet: size=%zu, dest=%s:%d, socket=%d, retry_count=%d", 
                  packet_size, addr_str, ntohs(client_addr.sin_port), gvsp_sock, socket_error_count);
     }
 
@@ -574,7 +574,7 @@ static esp_err_t gvsp_send_udp_packet(const uint8_t *packet, size_t packet_size,
                 if (retry < max_retries - 1)
                 {
                     vTaskDelay(pdMS_TO_TICKS(10 + retry * 5)); // Progressive backoff: 10ms, 15ms, 20ms
-                    PROTOCOL_LOG_I(TAG, "Buffer recovery delay completed, retrying packet transmission");
+                    ESP_LOGI(TAG, "Buffer recovery delay completed, retrying packet transmission");
                 }
             }
 
@@ -739,7 +739,7 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
     }
 
     // Check if multipart mode is enabled
-    if (gvcp_get_multipart_enabled())
+    if (genicam_registers_get_multipart_enabled())
     {
         ESP_LOGI(TAG, "Sending frame in multipart mode");
         return gvsp_send_multipart_frame(fb);
@@ -748,7 +748,7 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
     // Log frame transmission details with client information
     char addr_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(client_addr.sin_addr), addr_str, INET_ADDRSTRLEN);
-    PROTOCOL_LOG_I(TAG, "Sending frame: block_id=%d, size=%d, %dx%d, dest=%s:%d, packets_sent=%d", 
+    ESP_LOGI(TAG, "Sending frame: block_id=%d, size=%d, %dx%d, dest=%s:%d, packets_sent=%d", 
              block_id, fb->len, fb->width, fb->height, 
              addr_str, ntohs(client_addr.sin_port), total_packets_sent);
 
@@ -791,8 +791,8 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
     // Send data packets
     uint32_t bytes_sent = 0;
     const uint8_t *data_ptr = fb->buf;
-    uint32_t configured_packet_size = gvcp_get_packet_size();
-    uint32_t packet_delay_us = gvcp_get_packet_delay_us();
+    uint32_t configured_packet_size = genicam_registers_get_packet_size();
+    uint32_t packet_delay_us = genicam_registers_get_packet_delay_us();
 
     while (bytes_sent < fb->len)
     {
@@ -806,7 +806,7 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
         if (err != ESP_OK)
         {
             ESP_LOGE(TAG, "Failed to send data packet at offset %d", bytes_sent);
-            gvcp_set_stream_status(0x8000); // Set error bit
+            genicam_registers_set_stream_status(0x8000); // Set error bit
             return err;
         }
 
@@ -824,7 +824,7 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
     if (err != ESP_OK)
     {
         total_frame_errors++;
-        gvcp_set_stream_status(0x8000); // Set error bit
+        genicam_registers_set_stream_status(0x8000); // Set error bit
         return err;
     }
 
@@ -833,17 +833,17 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
     total_frames_sent++;
 
     uint32_t total_packets = (fb->len + configured_packet_size - 1) / configured_packet_size + 2;
-    PROTOCOL_LOG_I(TAG, "Frame sent successfully: %d packets, block_id=%d", total_packets, block_id);
+    ESP_LOGI(TAG, "Frame sent successfully: %d packets, block_id=%d", total_packets, block_id);
 
     // Update stream status with success
-    gvcp_set_stream_status(0x0001); // Active streaming bit
+    genicam_registers_set_stream_status(0x0001); // Active streaming bit
 
     return ESP_OK;
 }
 
 void gvsp_task(void *pvParameters)
 {
-    PROTOCOL_LOG_I(TAG, "GVSP task started");
+    ESP_LOGI(TAG, "GVSP task started");
     last_heartbeat_check = esp_log_timestamp();
 
     // Add this task to watchdog monitoring
@@ -878,13 +878,13 @@ void gvsp_task(void *pvParameters)
                     if (err == ESP_ERR_TIMEOUT)
                     {
                         // In recovery mode now, set timeout status
-                        gvcp_set_stream_status(0x4000); // Set timeout bit
+                        genicam_registers_set_stream_status(0x4000); // Set timeout bit
                     }
                     else
                     {
                         // Just a single timeout, stop streaming but keep connection
                         gvsp_stop_streaming();
-                        gvcp_set_stream_status(0x2000); // Set warning bit
+                        genicam_registers_set_stream_status(0x2000); // Set warning bit
                     }
                 }
             }
@@ -918,7 +918,7 @@ void gvsp_task(void *pvParameters)
             }
 
             // Configurable delay between frames
-            float frame_rate = gvcp_get_frame_rate_fps();
+            float frame_rate = genicam_registers_get_frame_rate_fps();
             uint32_t frame_delay_ms = (frame_rate > 0.0f) ? (uint32_t)(1000.0f / frame_rate) : 1000;
             vTaskDelay(pdMS_TO_TICKS(frame_delay_ms));
         }
@@ -943,7 +943,8 @@ esp_err_t gvsp_set_client_address(struct sockaddr_in *addr)
     memcpy(&client_addr, addr, sizeof(client_addr));
     
     // Use the port configured by the client via GVCP register, or fall back to GVSP_PORT
-    uint32_t configured_port = gvcp_get_scphost_port();
+    uint32_t configured_port = 0;
+    genicam_registers_read(GVCP_GEV_SCP_HOST_PORT_OFFSET, &configured_port);
     uint16_t target_port = (configured_port > 0 && configured_port <= 65535) ? (uint16_t)configured_port : GVSP_PORT;
     
     client_addr.sin_port = htons(target_port);
@@ -952,7 +953,7 @@ esp_err_t gvsp_set_client_address(struct sockaddr_in *addr)
 
     char addr_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(addr->sin_addr), addr_str, INET_ADDRSTRLEN);
-    PROTOCOL_LOG_I(TAG, "GVSP client address set to %s:%d (configured_port=%d, using=%s)", 
+    ESP_LOGI(TAG, "GVSP client address set to %s:%d (configured_port=%d, using=%s)", 
              addr_str, target_port, configured_port,
              (configured_port > 0) ? "configured" : "default");
 
@@ -963,7 +964,7 @@ esp_err_t gvsp_clear_client_address(void)
 {
     if (client_addr_set)
     {
-        PROTOCOL_LOG_I(TAG, "Clearing GVSP client address and cleaning up connection state");
+        ESP_LOGI(TAG, "Clearing GVSP client address and cleaning up connection state");
 
         // Stop streaming if active
         if (streaming_active)
@@ -985,9 +986,9 @@ esp_err_t gvsp_clear_client_address(void)
         gvcp_set_connection_status_bit(3, false); // Clear streaming active bit
 
         // Clear stream status
-        gvcp_set_stream_status(0x0000);
+        genicam_registers_set_stream_status(0x0000);
 
-        PROTOCOL_LOG_I(TAG, "GVSP client connection state fully cleaned up");
+        ESP_LOGI(TAG, "GVSP client connection state fully cleaned up");
     }
 
     return ESP_OK;
@@ -1030,7 +1031,7 @@ static esp_err_t gvsp_handle_connection_failure(void)
             // Clean up current connection
             gvsp_stop_streaming();
             gvsp_clear_client_address();
-            gvcp_set_stream_status(0x8000);           // Set error bit
+            genicam_registers_set_stream_status(0x8000);           // Set error bit
             gvcp_set_connection_status_bit(2, false); // Clear client connected bit
             gvcp_set_connection_status_bit(3, false); // Clear streaming active bit
         }
@@ -1134,7 +1135,7 @@ esp_err_t gvsp_resend_frame(uint32_t block_id)
         return err;
     }
 
-    PROTOCOL_LOG_I(TAG, "Resending frame with block_id %d", block_id);
+    ESP_LOGI(TAG, "Resending frame with block_id %d", block_id);
 
     // Note: We don't store the frame again since it's already in the ring
     // Just send it with the original block_id
@@ -1181,11 +1182,11 @@ esp_err_t gvsp_set_sequence_tracking(bool enabled)
     sequence_tracking_enabled = enabled;
     if (enabled)
     {
-        PROTOCOL_LOG_I(TAG, "Frame sequence tracking enabled");
+        ESP_LOGI(TAG, "Frame sequence tracking enabled");
     }
     else
     {
-        PROTOCOL_LOG_I(TAG, "Frame sequence tracking disabled");
+        ESP_LOGI(TAG, "Frame sequence tracking disabled");
     }
     return ESP_OK;
 }
@@ -1271,7 +1272,7 @@ esp_err_t gvsp_force_cleanup(void)
     // Update connection status
     gvcp_set_connection_status_bit(2, false); // Clear client connected bit
     gvcp_set_connection_status_bit(3, false); // Clear streaming active bit
-    gvcp_set_stream_status(0x0000);
+    genicam_registers_set_stream_status(0x0000);
 
     ESP_LOGI(TAG, "Force cleanup completed");
     return ESP_OK;
@@ -1280,7 +1281,7 @@ esp_err_t gvsp_force_cleanup(void)
 // Multipart payload support implementation
 esp_err_t gvsp_send_multipart_frame(local_camera_fb_t *fb)
 {
-    PROTOCOL_LOG_I(TAG, "Sending multipart frame: block_id=%d, size=%d, %dx%d",
+    ESP_LOGI(TAG, "Sending multipart frame: block_id=%d, size=%d, %dx%d",
              block_id, fb->len, fb->width, fb->height);
 
     // In multipart mode, we send the image as component 0
@@ -1294,7 +1295,7 @@ esp_err_t gvsp_send_multipart_frame(local_camera_fb_t *fb)
     // TODO: Add metadata component (component 1) support in future enhancement
     // For now, just send the image component to demonstrate multipart capability
 
-    PROTOCOL_LOG_I(TAG, "Multipart frame sent successfully");
+    ESP_LOGI(TAG, "Multipart frame sent successfully");
     return ESP_OK;
 }
 
@@ -1328,8 +1329,8 @@ esp_err_t gvsp_send_component(local_camera_fb_t *fb, uint8_t component_type, uin
     // Send data packets in chunks
     const uint8_t *data_ptr = fb->buf;
     uint32_t bytes_sent = 0;
-    uint32_t configured_packet_size = gvcp_get_packet_size();
-    uint32_t packet_delay_us = gvcp_get_packet_delay_us();
+    uint32_t configured_packet_size = genicam_registers_get_packet_size();
+    uint32_t packet_delay_us = genicam_registers_get_packet_delay_us();
 
     while (bytes_sent < fb->len)
     {
@@ -1400,7 +1401,7 @@ static esp_err_t gvsp_send_leader_packet_multipart(uint32_t frame_size, uint32_t
     leader_data->padding_x = htons(0);
     leader_data->padding_y = htons(0);
 
-    PROTOCOL_LOG_I(TAG, "Sending multipart leader: payload_type=0x%04x, component=%d, size=%dx%d",
+    ESP_LOGI(TAG, "Sending multipart leader: payload_type=0x%04x, component=%d, size=%dx%d",
              payload_type, component_index, width, height);
 
     esp_err_t err = gvsp_send_udp_packet(packet, sizeof(packet), 3);
@@ -1435,7 +1436,7 @@ static esp_err_t gvsp_send_trailer_packet_multipart(uint32_t height, uint16_t pa
     trailer_data->payload_type = htons(payload_type); // Multipart payload type
     trailer_data->size_y = htonl(height);
 
-    PROTOCOL_LOG_I(TAG, "Sending multipart trailer: payload_type=0x%04x, component=%d",
+    ESP_LOGI(TAG, "Sending multipart trailer: payload_type=0x%04x, component=%d",
              payload_type, component_index);
 
     esp_err_t err = gvsp_send_udp_packet(packet, sizeof(packet), 3);

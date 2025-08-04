@@ -13,8 +13,15 @@ set(PLATFORM_INDEPENDENT_SRCS
     "genicam/registers.c"
     "genicam/xml.c"
     
+    # Web modules
+    "web/web_templates.c"
+    "web/web_api.c"
+    "web/web_routes.c"
+    
     # Utility modules
     "utils/byte_order.c"
+    "utils/web_platform.c"
+    "utils/web_platform_esp32.c"
     
     # Platform implementation (ESP32)
     "platform_esp32.c"
@@ -22,5 +29,5 @@ set(PLATFORM_INDEPENDENT_SRCS
 
 idf_component_register(SRCS ${PLATFORM_INDEPENDENT_SRCS}
                       INCLUDE_DIRS "."
-                      REQUIRES esp_timer esp_system lwip
+                      REQUIRES esp_timer esp_system lwip esp_http_server
                       PRIV_REQUIRES esp_wifi)

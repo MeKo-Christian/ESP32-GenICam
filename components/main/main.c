@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 
+#include "utils/platform.h"
 #include "wifi_manager.h"
 #include "camera_handler.h"
 #include "gvcp_handler.h"
@@ -21,6 +22,10 @@ void app_main(void)
     esp_err_t ret;
 
     ESP_LOGI(TAG, "ESP32 GenICam Camera starting...");
+
+    // Initialize platform abstraction layer for ESP32
+    ESP_LOGI(TAG, "Initializing platform abstraction...");
+    platform_init_esp32();
 
     ESP_LOGI(TAG, "Initializing status LED...");
     ESP_ERROR_CHECK(status_led_init());
