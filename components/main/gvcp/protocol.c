@@ -1,5 +1,5 @@
-#include "gvcp_protocol.h"
-#include "gvcp_statistics.h"
+#include "protocol.h"
+#include "statistics.h"
 #include "esp_log.h"
 #include <string.h>
 #include <arpa/inet.h>

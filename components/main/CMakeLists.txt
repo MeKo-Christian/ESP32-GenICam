@@ -1,16 +1,16 @@
 # Base source files (always included)
 set(COMPONENT_SRCS 
     "main.c"
-    "gvcp_handler.c"
-    "gvcp_protocol.c"
-    "gvcp_discovery.c"
-    "gvcp_bootstrap.c"
-    "gvcp_registers.c"
-    "gvcp_statistics.c"
-    "gvsp_handler.c"
+    "gvcp/handler.c"
+    "gvcp/protocol.c"
+    "gvcp/discovery.c"
+    "gvcp/bootstrap.c"
+    "gvcp/registers.c"
+    "gvcp/statistics.c"
+    "gvsp/handler.c"
     "camera_handler.c" 
     "wifi_manager.c"
-    "genicam_xml.c"
+    "genicam/xml.c"
     "status_led.c"
 )
 

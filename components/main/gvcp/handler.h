@@ -1,11 +1,11 @@
 #pragma once
 
 // Include all modular GVCP components
-#include "gvcp_protocol.h"
-#include "gvcp_discovery.h"
-#include "gvcp_bootstrap.h"
-#include "gvcp_registers.h"
-#include "gvcp_statistics.h"
+#include "protocol.h"
+#include "discovery.h"
+#include "bootstrap.h"
+#include "registers.h"
+#include "statistics.h"
 
 // Protocol debug logging macros
 #ifdef CONFIG_ENABLE_PROTOCOL_DEBUG_LOGS

@@ -124,16 +124,22 @@ idf.py fullclean        # Full clean
 
 **Multi-task Architecture:**
 - **Main Task** (`main.c:15`) - Initializes all components and creates GVCP/GVSP tasks
-- **GVCP Task** (`gvcp_handler.c`) - ✅ Handles GigE Vision Control Protocol on UDP port 3956
-- **GVSP Task** (`gvsp_handler.c`) - ✅ Streams image data via GigE Vision Stream Protocol  
+- **GVCP Task** (`gvcp/handler.c`) - ✅ Handles GigE Vision Control Protocol on UDP port 3956
+- **GVSP Task** (`gvsp/handler.c`) - ✅ Streams image data via GigE Vision Stream Protocol  
 - **Camera Task** (integrated) - ✅ Captures real frames from ESP32-CAM OV2640 sensor
 
 **Core Modules - All Functional:**
 1. **WiFi Manager** (`wifi_manager.c/h`) - ✅ WiFi connection and network setup
 2. **Camera Handler** (`camera_handler.c/h`) - ✅ ESP32-CAM OV2640 interface with real 320x240 grayscale capture
-3. **GVCP Handler** (`gvcp_handler.c/h`) - ✅ Complete GigE Vision Control Protocol implementation
-4. **GVSP Handler** (`gvsp_handler.c/h`) - ✅ Image streaming with Leader/Data/Trailer packets
-5. **GenICam XML** (`genicam_xml.c/h`) - ✅ Camera feature description served via memory reads
+3. **GVCP Protocol** (`gvcp/`) - ✅ Complete GigE Vision Control Protocol implementation
+   - **Handler** (`gvcp/handler.c/h`) - Main GVCP protocol handler
+   - **Protocol** (`gvcp/protocol.c/h`) - Core protocol implementation
+   - **Discovery** (`gvcp/discovery.c/h`) - Device discovery functionality
+   - **Bootstrap** (`gvcp/bootstrap.c/h`) - Bootstrap register management
+   - **Registers** (`gvcp/registers.c/h`) - Register read/write operations
+   - **Statistics** (`gvcp/statistics.c/h`) - Protocol statistics tracking
+4. **GVSP Handler** (`gvsp/handler.c/h`) - ✅ Image streaming with Leader/Data/Trailer packets
+5. **GenICam XML** (`genicam/xml.c/h`) - ✅ Camera feature description served via memory reads
 
 ### Protocol Implementation Status
 

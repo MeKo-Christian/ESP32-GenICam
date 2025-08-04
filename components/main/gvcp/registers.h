@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gvcp_protocol.h"
+#include "protocol.h"
 #include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>

@@ -7,8 +7,8 @@
 
 #include "wifi_manager.h"
 #include "camera_handler.h"
-#include "gvcp_handler.h"
-#include "gvsp_handler.h"
+#include "gvcp/handler.h"
+#include "gvsp/handler.h"
 #include "status_led.h"
 #ifdef CONFIG_ENABLE_WEB_SERVER
 #include "web_server.h"

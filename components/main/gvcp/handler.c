@@ -1,8 +1,8 @@
-#include "gvcp_handler.h"
-#include "genicam_xml.h"
-#include "gvsp_handler.h"
-#include "camera_handler.h"
-#include "status_led.h"
+#include "handler.h"
+#include "../genicam/xml.h"
+#include "../gvsp/handler.h"
+#include "../camera_handler.h"
+#include "../status_led.h"
 
 // Default GVSP packet size if not defined
 #ifndef GVSP_DATA_PACKET_SIZE

@@ -4,7 +4,7 @@
 #include "esp_netif.h"
 #include "freertos/event_groups.h"
 #include "status_led.h"
-#include "gvcp_handler.h"
+#include "gvcp/handler.h"
 
 static const char *TAG = "wifi_manager";
 

@@ -104,18 +104,28 @@ Use `just help` for complete command reference.
 
 ```
 ESP32GenICam/
-├── justfile               # Development workflow commands
-├── .envrc                 # WiFi credentials (environment variables)
-├── src/                   # Core implementation
-│   ├── main.c            # Application entry point
-│   ├── wifi_manager.*    # Network connectivity  
-│   ├── gvcp_handler.*    # Control protocol (port 3956)
-│   ├── gvsp_handler.*    # Streaming protocol
-│   ├── camera_handler.*  # ESP32-CAM hardware interface
-│   └── genicam_xml.*     # XML feature description
-├── components/           # ESP32-camera driver integration
-├── tools/schema/         # GenICam XML validation
-└── CLAUDE.md            # Developer architecture guide
+├── justfile                    # Development workflow commands
+├── .envrc                      # WiFi credentials (environment variables)
+├── components/main/            # Core implementation
+│   ├── main.c                 # Application entry point
+│   ├── wifi_manager.*         # Network connectivity
+│   ├── camera_handler.*       # ESP32-CAM hardware interface  
+│   ├── status_led.*           # Status LED control
+│   ├── web_server.*           # Optional web interface
+│   ├── gvcp/                  # GigE Vision Control Protocol
+│   │   ├── handler.*          # Main GVCP handler
+│   │   ├── protocol.*         # Protocol implementation
+│   │   ├── discovery.*        # Device discovery
+│   │   ├── bootstrap.*        # Bootstrap registers
+│   │   ├── registers.*        # Register management
+│   │   └── statistics.*       # Protocol statistics
+│   ├── gvsp/                  # GigE Vision Stream Protocol  
+│   │   └── handler.*          # Image streaming
+│   └── genicam/               # GenICam XML features
+│       └── xml.*              # XML feature description
+├── components/esp32-camera/   # ESP32-camera driver integration
+├── tools/schema/              # GenICam XML validation
+└── CLAUDE.md                 # Developer architecture guide
 ```
 
 ## 🎯 Expected Behavior
