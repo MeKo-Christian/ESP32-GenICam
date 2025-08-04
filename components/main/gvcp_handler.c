@@ -390,16 +390,42 @@ static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *d
     
     ESP_LOGI(TAG, "READ_MEMORY: address=0x%08x, length=%d", address, length);
     
-    uint8_t response[sizeof(gvcp_header_t) + length];
+    // Handle zero-length reads by providing a reasonable default
+    uint16_t actual_length = length;
+    if (length == 0) {
+        // For bootstrap register string reads, use a reasonable buffer size
+        if (address < 0x1000) {
+            actual_length = 256; // Reasonable size for string data
+        } else {
+            actual_length = 4; // Default to 4 bytes for register reads
+        }
+        ESP_LOGW(TAG, "Zero-length read requested, using default length %d", actual_length);
+    }
+    
+    uint8_t response[sizeof(gvcp_header_t) + actual_length];
     gvcp_header_t *ack_header = (gvcp_header_t *)response;
     uint8_t *response_data = response + sizeof(gvcp_header_t);
     
     // Use the abstracted register interface
-    genicam_registers_result_t result = genicam_registers_read_memory(address, response_data, length);
+    genicam_registers_result_t result = genicam_registers_read_memory(address, response_data, actual_length);
     
     if (result == GENICAM_REGISTERS_SUCCESS) {
-        gvcp_create_ack_header(ack_header, header, GVCP_ACK_READ_MEMORY, GVCP_BYTES_TO_WORDS(length));
-        gvcp_sendto(response, sizeof(response), client_addr);
+        // For zero-length original requests, determine actual data length to send
+        uint16_t response_length = actual_length;
+        if (length == 0 && address < 0x1000) {
+            // For string data, find the actual string length (up to null terminator)
+            for (uint16_t i = 0; i < actual_length; i++) {
+                if (response_data[i] == 0) {
+                    response_length = i + 1; // Include null terminator
+                    break;
+                }
+            }
+        } else if (length == 0) {
+            response_length = 4; // Standard register size
+        }
+        
+        gvcp_create_ack_header(ack_header, header, GVCP_ACK_READ_MEMORY, GVCP_BYTES_TO_WORDS(response_length));
+        gvcp_sendto(response, sizeof(gvcp_header_t) + response_length, client_addr);
     } else {
         uint16_t error_code = (result == GENICAM_REGISTERS_INVALID_ADDRESS) ? 
             GVCP_ERROR_INVALID_ADDRESS : GVCP_ERROR_ACCESS_DENIED;

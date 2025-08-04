@@ -78,6 +78,7 @@ typedef gvcp_result_t (*gvcp_send_callback_t)(const void *data, size_t len, void
 
 // Protocol utility functions
 gvcp_result_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, void *client_addr);
+gvcp_result_t gvcp_send_response(const void *data, size_t data_len, void *client_addr);
 bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len);
 void gvcp_create_command_header(gvcp_header_t *cmd, uint16_t command_code, uint16_t size_words, uint16_t packet_id, bool ack_required);
 void gvcp_create_ack_header(gvcp_header_t *ack, const gvcp_header_t *request, uint16_t ack_code, uint16_t size_words);

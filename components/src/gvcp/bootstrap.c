@@ -165,6 +165,17 @@ static void init_bootstrap_memory(void) {
     strncpy((char *)&bootstrap_memory[GVBS_XML_URL_0_OFFSET], XML_URL, xml_url_max_size - 1);
     bootstrap_memory[GVBS_XML_URL_0_OFFSET + xml_url_max_size - 1] = '\0'; // Ensure null termination
 
+    // Additional XML URL at failsafe location 0x400 for Aravis compatibility
+    size_t url_len = strlen(XML_URL);
+    size_t failsafe_max_len = BOOTSTRAP_MEMORY_SIZE - 0x400 - 1; // Reserve space for null terminator
+    if (url_len < failsafe_max_len) {
+        memcpy(&bootstrap_memory[0x400], XML_URL, url_len);
+        bootstrap_memory[0x400 + url_len] = '\0'; // Ensure null termination
+    } else if (failsafe_max_len > 0) {
+        memcpy(&bootstrap_memory[0x400], XML_URL, failsafe_max_len - 1);
+        bootstrap_memory[0x400 + failsafe_max_len - 1] = '\0'; // Ensure null termination
+    }
+
     // Heartbeat timeout register (ms) - default 3000ms (3 seconds)
     // This register tells Aravis how often to send heartbeat messages
     write_register_value(&bootstrap_memory[GVBS_HEARTBEAT_TIMEOUT_OFFSET], 3000, 4);

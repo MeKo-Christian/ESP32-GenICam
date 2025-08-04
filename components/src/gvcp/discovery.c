@@ -57,8 +57,8 @@ static gvcp_discovery_result_t send_discovery_internal(uint16_t packet_id, void 
 
         platform->log_info(TAG, "GigE Vision SPEC: Sending discovery response with packet ID=0x%04x", ntohs(packet_id));
 
-        // Send using the protocol layer
-        gvcp_result_t result = gvcp_send_nack(ack_header, 0, dest_addr);  // Using NACK function for sending general packets
+        // Send discovery response directly using callback (not as NACK since this is an ACK response)
+        gvcp_result_t result = gvcp_send_response(response, sizeof(response), dest_addr);
         
         if (result == GVCP_RESULT_SUCCESS) {
             platform->log_info(TAG, "GigE Vision SPEC: Discovery response sent (%d bytes)", sizeof(response));

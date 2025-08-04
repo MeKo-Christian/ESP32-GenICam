@@ -108,6 +108,25 @@ gvcp_result_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t erro
     }
 }
 
+// Send a GVCP response packet directly (for ACK responses like discovery)
+gvcp_result_t gvcp_send_response(const void *data, size_t data_len, void *client_addr) {
+    if (data == NULL || data_len == 0 || client_addr == NULL) {
+        platform->log_error(TAG, "Invalid parameters for GVCP response send");
+        return GVCP_RESULT_INVALID_ARG;
+    }
+
+    // Send response directly using the callback
+    gvcp_result_t result = gvcp_sendto(data, data_len, client_addr);
+    
+    if (result != GVCP_RESULT_SUCCESS) {
+        platform->log_error(TAG, "Error sending GVCP response");
+        return GVCP_RESULT_SEND_FAILED;
+    } else {
+        platform->log_info(TAG, "Successfully sent GVCP response (%zu bytes)", data_len);
+        return GVCP_RESULT_SUCCESS;
+    }
+}
+
 bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len) {
     if (header == NULL)
         return false;
