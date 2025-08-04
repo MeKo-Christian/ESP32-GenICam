@@ -134,15 +134,35 @@ The core implementation is complete and functional. Potential extensions include
 - [ ] **Protocol Validation** - Automated compliance testing against GenICam/GigE Vision standards
 - [ ] **Performance Benchmarks** - Frame rate and latency measurement tools
 
-#### Phase 1: Code Refactoring for Testability
+#### Phase 1: Code Refactoring for Testability ✅ COMPLETED
 
 Goal: Isolate protocol logic from ESP-IDF to enable host-based testing.
 
-- [ ] Extract GVCP, GVSP, and GenICam logic into pure C modules
-- [ ] Create platform_interface_t abstraction layer
-- [ ] Implement platform_host.c and platform_esp32.c
-- [ ] Remove esp_log.h, sockets.h, and other ESP-IDF dependencies from logic
-- [ ] Split register logic and XML generation into independent modules
+- [x] Extract GVCP, GVSP, and GenICam logic into pure C modules
+- [x] Create platform_interface_t abstraction layer
+- [x] Implement platform_host.c and platform_esp32.c
+- [x] Remove esp_log.h, sockets.h, and other ESP-IDF dependencies from logic
+- [x] Split register logic and XML generation into independent modules
+
+**Status: ✅ COMPLETED** - All protocol logic successfully extracted to `components/src/` with clean platform abstraction.
+
+#### Phase 1.5: ESP32 Integration Layer Update ⚠️ CURRENT PRIORITY
+
+Goal: Update ESP32-specific integration code to use new abstracted modules.
+
+**Status: Required before ESP32 build works**
+
+- [ ] Update `components/main/gvcp_handler.c` to use new `genicam_registers_*` functions
+- [ ] Update `components/main/gvsp_handler.c` to use new register interface
+- [ ] Update `components/main/wifi_manager.c` to use new discovery interface  
+- [ ] Update `components/main/main.c` to initialize platform abstraction layer
+- [ ] Fix all linking errors by mapping old function calls to new interface
+- [ ] Remove duplicate files (old gvcp_discovery.c, gvcp_registers.c, etc.) from main/
+- [ ] Update main/CMakeLists.txt to remove duplicate source files
+- [ ] Verify ESP32 build completes successfully
+- [ ] Test that ESP32 functionality remains unchanged after refactoring
+
+**Current Issue:** ESP32 integration layer has duplicate modules (e.g., `components/main/gvcp_discovery.c` duplicates functionality now in `components/src/gvcp/discovery.c`). The old modules need to be removed and the integration layer updated to use the abstracted modules.
 
 #### Phase 2: Host Testing Infrastructure
 
@@ -173,13 +193,35 @@ Goal: Validate real hardware functionality and GigE Vision compliance.
 
 ```
 ESP32GenICam/
-├── src/                    # Core implementation (6 modules)
-├── components/             # ESP32-camera driver integration
-├── tools/schema/           # GenICam XML validation schema
-├── tests/host/             # Fast unit tests for host testing
-├── justfile               # Development workflow commands
-├── platformio.ini         # Build configuration and WiFi settings
-└── CLAUDE.md              # Developer guidance and architecture notes
+├── components/
+│   ├── src/                    # Platform-independent modules (NEW - Phase 1)
+│   │   ├── gvcp/              # GVCP protocol modules  
+│   │   │   ├── protocol.c/h   # Packet validation, header creation
+│   │   │   ├── bootstrap.c/h  # Bootstrap register logic
+│   │   │   └── discovery.c/h  # Discovery logic
+│   │   ├── gvsp/              # GVSP streaming modules
+│   │   │   ├── streaming.c/h  # Stream state machine
+│   │   │   └── packets.c/h    # GVSP packet format
+│   │   ├── genicam/           # GenICam modules
+│   │   │   ├── registers.c/h  # Register map + access rules
+│   │   │   └── xml.c/h        # XML generation
+│   │   ├── utils/             # Platform utilities
+│   │   │   ├── platform.h     # Platform abstraction interface
+│   │   │   └── byte_order.c/h # Endianness handling
+│   │   ├── platform_esp32.c   # ESP32 implementation
+│   │   └── platform_host.c    # Host implementation (for testing)
+│   ├── main/                  # ESP32-specific integration layer
+│   │   ├── main.c            # ESP32 application entry point
+│   │   ├── gvcp_handler.c    # ESP32 GVCP socket & task management
+│   │   ├── gvsp_handler.c    # ESP32 GVSP streaming & FreeRTOS
+│   │   ├── camera_handler.c  # ESP32-CAM hardware interface
+│   │   ├── wifi_manager.c    # ESP32 WiFi management
+│   │   └── ...               # Other ESP32-specific modules
+│   └── esp32-camera/          # Camera driver integration
+├── tests/host/                # Unit tests (READY for Phase 2)
+├── tools/schema/              # GenICam XML validation schema
+├── justfile                   # Development workflow commands
+└── CLAUDE.md                  # Developer guidance and architecture notes
 ```
 
 
@@ -198,12 +240,12 @@ The ESP32-CAM GenICam implementation is **production-ready** for internal testin
 
 ### Architecture
 
-The test infrastructure separates hardware-dependent and platform-independent logic for high test coverage and short feedback cycles. Protocol logic is refactored into pure C modules with no ESP-IDF dependencies, organized under `src/gvcp`, `src/gvsp`, and `src/genicam`.
+The test infrastructure separates hardware-dependent and platform-independent logic for high test coverage and short feedback cycles. Protocol logic is refactored into pure C modules with no ESP-IDF dependencies, organized under `components/src/gvcp`, `components/src/gvsp`, and `components/src/genicam`.
 
-### Directory Structure
+### Directory Structure (Updated - Post Phase 1)
 
 ```
-src/
+components/src/               # Platform-independent modules (NEW)
 ├── gvcp/
 │   ├── protocol.c/h   # Packet validation, header creation
 │   ├── bootstrap.c/h  # Bootstrap register logic
@@ -215,11 +257,21 @@ src/
 │   ├── registers.c/h  # Register map + access rules
 │   └── xml.c/h        # XML generation
 ├── utils/
-│   ├── platform.h     # Platform abstraction
-│   └── byte_order.c/h # Endianness
+│   ├── platform.h     # Platform abstraction interface
+│   └── byte_order.c/h # Network endianness handling
+├── platform_esp32.c   # ESP32 implementation of platform_interface_t
+└── platform_host.c    # Host implementation (for unit tests)
 
-platform_esp32.c       # ESP32 implementation of `platform_interface_t`
-platform_host.c        # Host implementation (used in tests)
+components/main/              # ESP32 integration layer (needs Phase 1.5 update)
+├── main.c                    # ESP32 application entry point
+├── gvcp_handler.c           # ESP32 GVCP socket & task management
+├── gvsp_handler.c           # ESP32 GVSP streaming & FreeRTOS
+├── camera_handler.c         # ESP32-CAM hardware interface
+├── wifi_manager.c           # ESP32 WiFi management
+└── ...                      # Other ESP32-specific modules
+
+tests/host/                   # Ready for Phase 2 unit tests
+└── Makefile                  # Build system for host testing
 ```
 
 ### Host Tests
@@ -260,19 +312,26 @@ int mock_network_send(...) {
 
 Used via `platform_interface_t` for unit testing send logic without real sockets.
 
-### Platform Interface
+### Platform Interface (Updated)
 
-**File: **``
+**File: components/src/utils/platform.h**
 
 ```c
 typedef struct {
-    void (*log_info)(...);
-    int (*network_send)(...);
+    void (*log_info)(const char* tag, const char* format, ...);
+    void (*log_error)(const char* tag, const char* format, ...);
+    void (*log_warn)(const char* tag, const char* format, ...);
+    void (*log_debug)(const char* tag, const char* format, ...);
+    int (*network_send)(const void* data, size_t len, void* addr);
     uint32_t (*get_time_ms)(void);
-    void* (*malloc)(size_t);
-    void (*free)(void*);
+    uint64_t (*get_time_us)(void);
+    void* (*malloc)(size_t size);
+    void (*free)(void* ptr);
+    void (*system_restart)(void);
 } platform_interface_t;
+
 extern const platform_interface_t* platform;
+void platform_init(const platform_interface_t* impl);
 ```
 
 ### ESP Integration
@@ -285,24 +344,41 @@ Minimal Unity-based tests run with `idf.py test`. These focus on:
 
 ---
 
-## Appendix B: Platform Abstraction Interface
+## Appendix B: Phase 1.5 TODO - ESP32 Integration Updates
 
-**File: src/utils/platform.h**
+### Required Changes for ESP32 Build
 
+**1. Remove Duplicate Files from components/main/:**
+- `gvcp_discovery.c/h` (now in `components/src/gvcp/discovery.c/h`)
+- `gvcp_registers.c/h` (now in `components/src/genicam/registers.c/h`)
+- `gvcp_bootstrap.c/h` (now in `components/src/gvcp/bootstrap.c/h`)
+- `gvcp_protocol.c/h` (now in `components/src/gvcp/protocol.c/h`)
+- `genicam_xml.c/h` (now in `components/src/genicam/xml.c/h`)
+
+**2. Update main/CMakeLists.txt:**
+Remove duplicate source files from COMPONENT_SRCS list.
+
+**3. Update Function Calls in ESP32 Integration Layer:**
+
+| Old Function | New Function |
+|--------------|-------------|
+| `gvcp_get_packet_size()` | `genicam_registers_get_packet_size()` |
+| `gvcp_get_packet_delay_us()` | `genicam_registers_get_packet_delay_us()` |
+| `handle_discovery_cmd()` | `gvcp_discovery_handle_cmd()` |
+| `generate_device_uuid()` | `gvcp_bootstrap_generate_uuid()` |
+| `get_bootstrap_memory()` | `gvcp_bootstrap_get_memory()` |
+
+**4. Initialize Platform Abstraction in main.c:**
 ```c
-// Platform abstraction for ESP32 vs host testing
-typedef struct {
-    void (*log_info)(const char* tag, const char* format, ...);
-    void (*log_error)(const char* tag, const char* format, ...);
-    void (*log_warn)(const char* tag, const char* format, ...);
-    int (*network_send)(const void* data, size_t len, void* addr);
-    uint32_t (*get_time_ms)(void);
-    void* (*malloc)(size_t size);
-    void (*free)(void* ptr);
-} platform_interface_t;
+#include "src/utils/platform.h"
+#include "src/platform_esp32.h"
 
-extern const platform_interface_t* platform;
+void app_main(void) {
+    platform_init(&esp32_platform_interface);
+    // ... rest of initialization
+}
 ```
 
-Both host and ESP32 implementations provide this interface for shared protocol logic.
+**5. Update Include Paths:**
+Replace local includes with `src/` module includes in ESP32 integration files.
 

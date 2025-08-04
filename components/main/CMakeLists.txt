@@ -1,20 +1,15 @@
-# Base source files (always included)
+# Base source files (ESP32-specific integration layer)
 set(COMPONENT_SRCS 
     "main.c"
     "gvcp_handler.c"
-    "gvcp_protocol.c"
-    "gvcp_discovery.c"
-    "gvcp_bootstrap.c"
-    "gvcp_registers.c"
     "gvcp_statistics.c"
     "gvsp_handler.c"
     "camera_handler.c" 
     "wifi_manager.c"
-    "genicam_xml.c"
     "status_led.c"
 )
 
-# Base required components
+# Base required components (including new src component)
 set(COMPONENT_REQUIRES 
     nvs_flash 
     esp_wifi 
@@ -22,6 +17,7 @@ set(COMPONENT_REQUIRES
     esp32-camera 
     esp_timer
     esp_http_server
+    src
 )
 
 # Conditionally add web server

@@ -1,6 +1,11 @@
 #include "gvcp_handler.h"
-#include "genicam_xml.h"
+#include "../src/genicam/xml.h"
+#include "../src/gvcp/bootstrap.h"
+#include "../src/gvcp/discovery.h"
+#include "../src/genicam/registers.h"
+#include "../src/gvcp/protocol.h"
 #include "gvsp_handler.h"
+#include "gvcp_statistics.h"
 #include "camera_handler.h"
 #include "status_led.h"
 
@@ -20,8 +25,19 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <sys/param.h>  // For MIN macro
 
 static const char *TAG = "gvcp_handler";
+
+// Forward declarations for internal handler functions
+static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+static void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr);
+static void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr);
+static void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
+static gvcp_result_t gvcp_send_callback_wrapper(const void *data, size_t len, void *addr);
+static void gvsp_client_callback_wrapper(void *addr);
 
 int sock = -1; // Made non-static for module access
 
@@ -40,22 +56,30 @@ esp_err_t gvcp_init(void)
 {
     struct sockaddr_in dest_addr;
 
-    // Validate GenICam XML data before initialization
-    ESP_LOGI(TAG, "Validating GenICam XML data...");
-    if (genicam_xml_size == 0)
+    // Initialize bootstrap memory
+    if (gvcp_bootstrap_init() != GVCP_BOOTSTRAP_SUCCESS)
     {
-        ESP_LOGE(TAG, "CRITICAL: genicam_xml_size is 0!");
+        ESP_LOGE(TAG, "Failed to initialize bootstrap memory");
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "GenICam XML validation: size=%d bytes, first chars: %.32s",
-             genicam_xml_size, (const char *)genicam_xml_data);
 
-    // Initialize bootstrap memory
-    init_bootstrap_memory();
+    // Set up callback functions for the abstracted modules
+    genicam_registers_set_bootstrap_callback(gvcp_bootstrap_get_memory);
+    gvcp_discovery_set_bootstrap_callback(gvcp_bootstrap_get_memory);
 
-    // Initialize all modules
-    gvcp_discovery_init();
-    gvcp_registers_init();
+    // Initialize register system
+    if (genicam_registers_init() != GENICAM_REGISTERS_SUCCESS)
+    {
+        ESP_LOGE(TAG, "Failed to initialize GenICam registers");
+        return ESP_FAIL;
+    }
+
+    // Initialize discovery system
+    if (gvcp_discovery_init() != GVCP_DISCOVERY_SUCCESS)
+    {
+        ESP_LOGE(TAG, "Failed to initialize GVCP discovery");
+        return ESP_FAIL;
+    }
 
     dest_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     dest_addr.sin_family = AF_INET;
@@ -109,12 +133,19 @@ esp_err_t gvcp_init(void)
     // Set GVCP socket active bit
     connection_status |= 0x01;
 
+    // Set the send callback for the protocol layer
+    gvcp_set_send_callback(gvcp_send_callback_wrapper);
+    
+    // Set callbacks for discovery module
+    gvcp_discovery_set_gvsp_client_callback(gvsp_client_callback_wrapper);
+    gvcp_discovery_set_connection_status_callback(gvcp_set_connection_status_bit);
+
     return ESP_OK;
 }
 
 void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *client_addr)
 {
-    gvcp_increment_total_commands();
+    genicam_registers_increment_total_commands();
 
     // Enhanced packet validation
     if (len < sizeof(gvcp_header_t))
@@ -167,7 +198,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
     {
         ESP_LOGE(TAG, "COMMAND CORRUPTION DETECTED: 0x%04x is not a valid GVCP command", command);
         ESP_LOGE(TAG, "Raw bytes at command field offset: packet[2]=0x%02x packet[3]=0x%02x", packet[2], packet[3]);
-        PROTOCOL_LOG_BUFFER_HEX(TAG, packet, MIN(len, 16), ESP_LOG_ERROR);
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, packet, MIN(len, 16), ESP_LOG_ERROR);
     }
 
     // Add GVCP protocol validation to check size field interpretation
@@ -177,8 +208,8 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
         uint16_t size_bytes = size_words * 4;
         size_t expected_len = sizeof(gvcp_header_t) + size_bytes;
 
-        PROTOCOL_LOG_W(TAG, "GVCP packet failed protocol validation - likely size field mismatch");
-        PROTOCOL_LOG_I(TAG, "Packet validation: header.size=%u words (%u bytes), total_len=%d, expected_len=%zu",
+        ESP_LOGW(TAG, "GVCP packet failed protocol validation - likely size field mismatch");
+        ESP_LOGI(TAG, "Packet validation: header.size=%u words (%u bytes), total_len=%d, expected_len=%zu",
                  size_words, size_bytes, len, expected_len);
         (void)expected_len; // Suppress unused variable warning when protocol logging disabled
     }
@@ -201,7 +232,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
     {
     case GVCP_CMD_DISCOVERY:
         ESP_LOGI(TAG, "Handling DISCOVERY command (0x%04x)", command);
-        handle_discovery_cmd(header, client_addr);
+        gvcp_discovery_handle_command(header, client_addr);
         break;
 
     case GVCP_CMD_READ_MEMORY:
@@ -321,4 +352,164 @@ void gvcp_task(void *pvParameters)
         // Small delay to prevent busy waiting
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+}
+
+// Internal ESP32 network send function
+static esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr) {
+    if (sock < 0) {
+        ESP_LOGE(TAG, "GVCP socket not initialized");
+        return ESP_FAIL;
+    }
+    
+    int bytes_sent = sendto(sock, data, data_len, 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
+    if (bytes_sent < 0) {
+        ESP_LOGE(TAG, "Failed to send GVCP response: errno %d", errno);
+        return ESP_FAIL;
+    }
+    
+    return ESP_OK;
+}
+
+// Callback wrapper to bridge gvcp_protocol.c with ESP32 socket implementation
+static gvcp_result_t gvcp_send_callback_wrapper(const void *data, size_t len, void *addr) {
+    struct sockaddr_in *client_addr = (struct sockaddr_in *)addr;
+    esp_err_t result = gvcp_sendto(data, len, client_addr);
+    return (result == ESP_OK) ? GVCP_RESULT_SUCCESS : GVCP_RESULT_SEND_FAILED;
+}
+
+// Wrapper for GVSP client address callback
+static void gvsp_client_callback_wrapper(void *addr) {
+    struct sockaddr_in *client_addr = (struct sockaddr_in *)addr;
+    gvsp_set_client_address(client_addr);
+}
+
+// Internal handler for READ_MEMORY commands
+static void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr) {
+    uint32_t address = ntohl(*(uint32_t *)data);
+    uint16_t length = ntohs(*(uint16_t *)(data + 4));
+    
+    ESP_LOGI(TAG, "READ_MEMORY: address=0x%08x, length=%d", address, length);
+    
+    // Handle zero-length reads by providing a reasonable default
+    uint16_t actual_length = length;
+    if (length == 0) {
+        // For bootstrap register string reads, use a reasonable buffer size
+        if (address < 0x1000) {
+            actual_length = 256; // Reasonable size for string data
+        } else {
+            actual_length = 4; // Default to 4 bytes for register reads
+        }
+        ESP_LOGW(TAG, "Zero-length read requested, using default length %d", actual_length);
+    }
+    
+    uint8_t response[sizeof(gvcp_header_t) + actual_length];
+    gvcp_header_t *ack_header = (gvcp_header_t *)response;
+    uint8_t *response_data = response + sizeof(gvcp_header_t);
+    
+    // Use the abstracted register interface
+    genicam_registers_result_t result = genicam_registers_read_memory(address, response_data, actual_length);
+    
+    if (result == GENICAM_REGISTERS_SUCCESS) {
+        // For zero-length original requests, determine actual data length to send
+        uint16_t response_length = actual_length;
+        if (length == 0 && address < 0x1000) {
+            // For string data, find the actual string length (up to null terminator)
+            for (uint16_t i = 0; i < actual_length; i++) {
+                if (response_data[i] == 0) {
+                    response_length = i + 1; // Include null terminator
+                    break;
+                }
+            }
+        } else if (length == 0) {
+            response_length = 4; // Standard register size
+        }
+        
+        gvcp_create_ack_header(ack_header, header, GVCP_ACK_READ_MEMORY, GVCP_BYTES_TO_WORDS(response_length));
+        gvcp_sendto(response, sizeof(gvcp_header_t) + response_length, client_addr);
+    } else {
+        uint16_t error_code = (result == GENICAM_REGISTERS_INVALID_ADDRESS) ? 
+            GVCP_ERROR_INVALID_ADDRESS : GVCP_ERROR_ACCESS_DENIED;
+        gvcp_send_nack(header, error_code, client_addr);
+    }
+}
+
+// Internal handler for WRITE_MEMORY commands
+static void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr) {
+    uint32_t address = ntohl(*(uint32_t *)data);
+    uint16_t data_len = ntohs(header->size) * 4 - 4; // Total data minus address field
+    
+    ESP_LOGI(TAG, "WRITE_MEMORY: address=0x%08x, length=%d", address, data_len);
+    
+    // Use the abstracted register interface
+    genicam_registers_result_t result = genicam_registers_write_memory(address, data + 4, data_len);
+    
+    if (result == GENICAM_REGISTERS_SUCCESS) {
+        gvcp_header_t ack_header;
+        gvcp_create_ack_header(&ack_header, header, GVCP_ACK_WRITE_MEMORY, 0);
+        gvcp_sendto(&ack_header, sizeof(ack_header), client_addr);
+    } else {
+        uint16_t error_code = (result == GENICAM_REGISTERS_INVALID_ADDRESS) ? 
+            GVCP_ERROR_INVALID_ADDRESS : GVCP_ERROR_ACCESS_DENIED;
+        gvcp_send_nack(header, error_code, client_addr);
+    }
+}
+
+// Internal handler for READREG commands
+static void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr) {
+    uint32_t address = ntohl(*(uint32_t *)data);
+    uint32_t value = 0;
+    
+    ESP_LOGI(TAG, "READREG: address=0x%08x", address);
+    
+    genicam_registers_result_t result = genicam_registers_read(address, &value);
+    
+    if (result == GENICAM_REGISTERS_SUCCESS) {
+        uint8_t response[sizeof(gvcp_header_t) + 4];
+        gvcp_header_t *ack_header = (gvcp_header_t *)response;
+        uint32_t *response_data = (uint32_t *)(response + sizeof(gvcp_header_t));
+        
+        gvcp_create_ack_header(ack_header, header, GVCP_ACK_READREG, 1);
+        *response_data = htonl(value);
+        gvcp_sendto(response, sizeof(response), client_addr);
+    } else {
+        uint16_t error_code = (result == GENICAM_REGISTERS_INVALID_ADDRESS) ? 
+            GVCP_ERROR_INVALID_ADDRESS : GVCP_ERROR_ACCESS_DENIED;
+        gvcp_send_nack(header, error_code, client_addr);
+    }
+}
+
+// Internal handler for WRITEREG commands
+static void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr) {
+    uint32_t address = ntohl(*(uint32_t *)data);
+    uint32_t value = ntohl(*(uint32_t *)(data + 4));
+    
+    ESP_LOGI(TAG, "WRITEREG: address=0x%08x, value=0x%08x", address, value);
+    
+    genicam_registers_result_t result = genicam_registers_write(address, value);
+    
+    if (result == GENICAM_REGISTERS_SUCCESS) {
+        gvcp_header_t ack_header;
+        gvcp_create_ack_header(&ack_header, header, GVCP_ACK_WRITEREG, 0);
+        gvcp_sendto(&ack_header, sizeof(ack_header), client_addr);
+    } else {
+        uint16_t error_code;
+        if (result == GENICAM_REGISTERS_INVALID_ADDRESS) {
+            error_code = GVCP_ERROR_INVALID_ADDRESS;
+        } else if (result == GENICAM_REGISTERS_WRITE_PROTECTED) {
+            error_code = GVCP_ERROR_WRITE_PROTECT;
+        } else {
+            error_code = GVCP_ERROR_ACCESS_DENIED;
+        }
+        gvcp_send_nack(header, error_code, client_addr);
+    }
+}
+
+// Internal handler for PACKETRESEND commands (basic implementation)
+static void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr) {
+    ESP_LOGI(TAG, "PACKETRESEND: command received (basic implementation)");
+    
+    // For now, send a simple ACK - packet resend functionality can be enhanced later
+    gvcp_header_t ack_header;
+    gvcp_create_ack_header(&ack_header, header, GVCP_ACK_PACKETRESEND, 0);
+    gvcp_sendto(&ack_header, sizeof(ack_header), client_addr);
 }

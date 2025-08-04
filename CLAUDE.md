@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status: ✅ COMPLETE IMPLEMENTATION
 
-This is a **fully functional GenICam/GigE Vision camera implementation** for ESP32-CAM. All core components are implemented and working:
+This is a **mostly functional GenICam/GigE Vision camera implementation** for ESP32-CAM. All core components are implemented and working:
 
 - ✅ GVCP (Control) protocol on UDP port 3956
 - ✅ GVSP (Streaming) protocol for image transmission  
@@ -33,7 +33,7 @@ just dev [port]
 just set-target        # Set ESP-IDF target to esp32
 just validate          # Validate GenICam XML schema compliance
 just build             # Build ESP32 project with ESP-IDF
-just flash [port]      # Flash to ESP32-CAM
+just flash [port]      # Flash to ESP32-CAM - DO NOT FLASH UNADVISED!!!
 just monitor [port]    # Monitor serial output
 just clean             # Clean build artifacts
 ```

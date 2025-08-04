@@ -1,4 +1,8 @@
-#include "genicam_xml.h"
+#include "xml.h"
+#include "../utils/platform.h"
+#include <string.h>
+
+static const char *TAG = "genicam_xml";
 
 const uint8_t genicam_xml_data[] =
     "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
@@ -497,4 +501,40 @@ const uint8_t genicam_xml_data[] =
     "\n"
     "</RegisterDescription>\n";
 
-const size_t genicam_xml_size = sizeof(genicam_xml_data) - 1; // Exclude null terminator
+static const size_t genicam_xml_size = sizeof(genicam_xml_data) - 1; // Exclude null terminator
+
+const uint8_t* genicam_xml_get_data(void) {
+    return genicam_xml_data;
+}
+
+size_t genicam_xml_get_size(void) {
+    return genicam_xml_size;
+}
+
+genicam_xml_result_t genicam_xml_init(void) {
+    platform->log_info(TAG, "GenICam XML initialized, size: %zu bytes", genicam_xml_size);
+    return GENICAM_XML_SUCCESS;
+}
+
+bool genicam_xml_validate(void) {
+    // Basic validation - check that XML has proper start and end tags
+    const char *xml_str = (const char*)genicam_xml_data;
+    
+    if (strstr(xml_str, "<?xml version") == NULL) {
+        platform->log_error(TAG, "XML validation failed: missing XML declaration");
+        return false;
+    }
+    
+    if (strstr(xml_str, "<RegisterDescription") == NULL) {
+        platform->log_error(TAG, "XML validation failed: missing RegisterDescription tag");
+        return false;
+    }
+    
+    if (strstr(xml_str, "</RegisterDescription>") == NULL) {
+        platform->log_error(TAG, "XML validation failed: missing closing RegisterDescription tag");
+        return false;
+    }
+    
+    platform->log_info(TAG, "GenICam XML validation passed");
+    return true;
+}

@@ -1,8 +1,9 @@
-#pragma once
+#ifndef GVCP_BOOTSTRAP_H
+#define GVCP_BOOTSTRAP_H
 
-#include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // Bootstrap register offsets (from Aravis GVBS definitions)
 #define GVBS_VERSION_OFFSET 0x00000000
@@ -46,15 +47,36 @@
 // Bootstrap memory needs to be large enough to hold heartbeat register at 0x934 + 4 bytes
 #define BOOTSTRAP_MEMORY_SIZE (0x938)
 
+// Result codes
+typedef enum {
+    GVCP_BOOTSTRAP_SUCCESS = 0,
+    GVCP_BOOTSTRAP_ERROR = -1,
+    GVCP_BOOTSTRAP_INVALID_ARG = -2
+} gvcp_bootstrap_result_t;
+
+// Network info structure for platform abstraction
+typedef struct {
+    uint8_t mac_address[6];
+    uint32_t ip_address;      // in network byte order
+    uint32_t subnet_mask;     // in network byte order  
+    uint32_t gateway;         // in network byte order
+    bool has_network_info;
+} gvcp_network_info_t;
+
 // Bootstrap register management
-esp_err_t gvcp_bootstrap_init(void);
-void init_bootstrap_memory(void);
-uint8_t *get_bootstrap_memory(void);
-size_t get_bootstrap_memory_size(void);
+gvcp_bootstrap_result_t gvcp_bootstrap_init(void);
+void gvcp_bootstrap_set_network_info(const gvcp_network_info_t *network_info);
+uint8_t *gvcp_bootstrap_get_memory(void);
+size_t gvcp_bootstrap_get_memory_size(void);
 
 // Control Channel Privilege management
-bool is_valid_privilege_value(uint32_t value);
-uint32_t gvcp_get_control_channel_privilege(void);
-void gvcp_set_control_channel_privilege(uint32_t value);
-uint32_t gvcp_get_control_channel_privilege_key(void);
-void gvcp_set_control_channel_privilege_key(uint32_t value);
+bool gvcp_bootstrap_is_valid_privilege_value(uint32_t value);
+uint32_t gvcp_bootstrap_get_control_channel_privilege(void);
+void gvcp_bootstrap_set_control_channel_privilege(uint32_t value);
+uint32_t gvcp_bootstrap_get_control_channel_privilege_key(void);
+void gvcp_bootstrap_set_control_channel_privilege_key(uint32_t value);
+
+// UUID generation (platform-independent)
+void gvcp_bootstrap_generate_device_uuid(uint8_t *uuid_out, const uint8_t *mac, const char *serial);
+
+#endif // GVCP_BOOTSTRAP_H

@@ -1,71 +1,58 @@
-#include "gvcp_protocol.h"
-#include "gvcp_statistics.h"
-#include "esp_log.h"
+#include "protocol.h"
+#include "../utils/platform.h"
 #include <string.h>
 #include <arpa/inet.h>
-#include <errno.h>
-#include "lwip/sockets.h"
 
 static const char *TAG = "gvcp_protocol";
 
-// External socket reference (maintained in gvcp_handler.c)
-extern int sock;
+// Network send callback
+static gvcp_send_callback_t send_callback = NULL;
 
 // Socket error tracking
 static uint32_t gvcp_socket_error_count = 0;
 static uint32_t gvcp_max_socket_errors = 3;
 
+void gvcp_set_send_callback(gvcp_send_callback_t callback) {
+    send_callback = callback;
+}
+
 // Helper function for GVCP sendto with error handling
-esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr)
-{
-    if (sock < 0)
-    {
-        ESP_LOGE(TAG, "Invalid GVCP socket for transmission");
+static gvcp_result_t gvcp_sendto(const void *data, size_t data_len, void *client_addr) {
+    if (send_callback == NULL) {
+        platform->log_error(TAG, "No send callback set for GVCP transmission");
         gvcp_socket_error_count++;
-        return ESP_FAIL;
+        return GVCP_RESULT_ERROR;
     }
 
-    if (data == NULL || data_len == 0 || client_addr == NULL)
-    {
-        ESP_LOGE(TAG, "Invalid parameters for GVCP sendto");
-        return ESP_ERR_INVALID_ARG;
+    if (data == NULL || data_len == 0 || client_addr == NULL) {
+        platform->log_error(TAG, "Invalid parameters for GVCP sendto");
+        return GVCP_RESULT_INVALID_ARG;
     }
 
-    int bytes_sent = sendto(sock, data, data_len, 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
+    gvcp_result_t result = send_callback(data, data_len, client_addr);
 
-    if (bytes_sent < 0)
-    {
-        ESP_LOGE(TAG, "GVCP sendto failed: errno %d (%s)", errno, strerror(errno));
+    if (result != GVCP_RESULT_SUCCESS) {
+        platform->log_error(TAG, "GVCP sendto failed");
         gvcp_socket_error_count++;
 
         // Check if we should recreate socket due to persistent errors
-        if (gvcp_socket_error_count >= gvcp_max_socket_errors)
-        {
-            ESP_LOGW(TAG, "GVCP socket error count reached %d, considering recreation", gvcp_socket_error_count);
+        if (gvcp_socket_error_count >= gvcp_max_socket_errors) {
+            platform->log_warn(TAG, "GVCP socket error count reached %d, considering recreation", gvcp_socket_error_count);
         }
 
-        return ESP_FAIL;
-    }
-    else if (bytes_sent != (int)data_len)
-    {
-        ESP_LOGW(TAG, "GVCP sendto partial transmission: %d/%d bytes", bytes_sent, data_len);
-        return ESP_FAIL;
-    }
-    else
-    {
+        return GVCP_RESULT_SEND_FAILED;
+    } else {
         // Reset error count on successful transmission
         gvcp_socket_error_count = 0;
-        return ESP_OK;
+        return GVCP_RESULT_SUCCESS;
     }
 }
 
-uint16_t gvcp_get_ack_command(uint16_t cmd_command)
-{
+uint16_t gvcp_get_ack_command(uint16_t cmd_command) {
     // Convert network byte order to host byte order for comparison
     uint16_t host_cmd = ntohs(cmd_command);
 
-    switch (host_cmd)
-    {
+    switch (host_cmd) {
     case GVCP_CMD_DISCOVERY:
         return htons(GVCP_ACK_DISCOVERY);
     case GVCP_CMD_PACKETRESEND:
@@ -81,16 +68,14 @@ uint16_t gvcp_get_ack_command(uint16_t cmd_command)
     default:
         // For unknown commands, return the original command
         // This maintains backward compatibility
-        ESP_LOGW(TAG, "Unknown command 0x%04x, using original in NACK", host_cmd);
+        platform->log_warn(TAG, "Unknown command 0x%04x, using original in NACK", host_cmd);
         return cmd_command;
     }
 }
 
-esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, struct sockaddr_in *client_addr)
-{
-    if (original_header == NULL || client_addr == NULL)
-    {
-        return ESP_ERR_INVALID_ARG;
+gvcp_result_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, void *client_addr) {
+    if (original_header == NULL || client_addr == NULL) {
+        return GVCP_RESULT_INVALID_ARG;
     }
 
     uint8_t response[sizeof(gvcp_header_t) + 2];
@@ -107,28 +92,42 @@ esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_co
     *(uint16_t *)&response[sizeof(gvcp_header_t)] = htons(error_code);
 
     // Log NACK packet details before sending
-    ESP_LOGW(TAG, "NACK packet: type=0x%02x (ERROR), orig_cmd=0x%04x, ack_cmd=0x%04x, error_code=0x%04x",
+    platform->log_warn(TAG, "NACK packet: type=0x%02x (ERROR), orig_cmd=0x%04x, ack_cmd=0x%04x, error_code=0x%04x",
              nack_header->packet_type, ntohs(original_header->command), ntohs(nack_header->command), error_code);
 
     // Send NACK response
-    esp_err_t err = gvcp_sendto(response, sizeof(response), client_addr);
+    gvcp_result_t result = gvcp_sendto(response, sizeof(response), client_addr);
 
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Error sending NACK response");
-        return ESP_FAIL;
-    }
-    else
-    {
-        gvcp_increment_total_errors();
-        ESP_LOGW(TAG, "Successfully sent NACK response for command 0x%04x→0x%04x with error code 0x%04x",
+    if (result != GVCP_RESULT_SUCCESS) {
+        platform->log_error(TAG, "Error sending NACK response");
+        return GVCP_RESULT_SEND_FAILED;
+    } else {
+        platform->log_warn(TAG, "Successfully sent NACK response for command 0x%04x→0x%04x with error code 0x%04x",
                  ntohs(original_header->command), ntohs(nack_header->command), error_code);
-        return ESP_OK;
+        return GVCP_RESULT_SUCCESS;
     }
 }
 
-bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len)
-{
+// Send a GVCP response packet directly (for ACK responses like discovery)
+gvcp_result_t gvcp_send_response(const void *data, size_t data_len, void *client_addr) {
+    if (data == NULL || data_len == 0 || client_addr == NULL) {
+        platform->log_error(TAG, "Invalid parameters for GVCP response send");
+        return GVCP_RESULT_INVALID_ARG;
+    }
+
+    // Send response directly using the callback
+    gvcp_result_t result = gvcp_sendto(data, data_len, client_addr);
+    
+    if (result != GVCP_RESULT_SUCCESS) {
+        platform->log_error(TAG, "Error sending GVCP response");
+        return GVCP_RESULT_SEND_FAILED;
+    } else {
+        platform->log_info(TAG, "Successfully sent GVCP response (%zu bytes)", data_len);
+        return GVCP_RESULT_SUCCESS;
+    }
+}
+
+bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len) {
     if (header == NULL)
         return false;
 
@@ -136,8 +135,7 @@ bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len)
         return false;
 
     // Allow known packet types
-    switch (header->packet_type)
-    {
+    switch (header->packet_type) {
     case 0x42: // Command
     case 0x00: // ACK
     case 0x80: // NACK/Error
@@ -153,8 +151,7 @@ bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len)
     return true;
 }
 
-void gvcp_create_command_header(gvcp_header_t *cmd, uint16_t command_code, uint16_t size_words, uint16_t packet_id, bool ack_required)
-{
+void gvcp_create_command_header(gvcp_header_t *cmd, uint16_t command_code, uint16_t size_words, uint16_t packet_id, bool ack_required) {
     if (!cmd)
         return;
 
@@ -165,8 +162,7 @@ void gvcp_create_command_header(gvcp_header_t *cmd, uint16_t command_code, uint1
     cmd->id = htons(packet_id);
 }
 
-void gvcp_create_ack_header(gvcp_header_t *ack, const gvcp_header_t *request, uint16_t ack_code, uint16_t size_words)
-{
+void gvcp_create_ack_header(gvcp_header_t *ack, const gvcp_header_t *request, uint16_t ack_code, uint16_t size_words) {
     if (!ack)
         return;
 

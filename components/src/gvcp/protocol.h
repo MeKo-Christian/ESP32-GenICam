@@ -1,13 +1,11 @@
-#pragma once
+#ifndef GVCP_PROTOCOL_H
+#define GVCP_PROTOCOL_H
 
-#include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <stddef.h>
 
-// Global socket reference (defined in gvcp_handler.c)
-extern int sock;
+// Platform-independent GVCP protocol definitions
 
 #define GVCP_PORT 3956
 
@@ -58,8 +56,7 @@ extern int sock;
 #define GVCP_ERROR_WRONG_CONFIG 0x800F
 
 // GVCP packet header structure (original format for compatibility)
-typedef struct __attribute__((packed))
-{
+typedef struct __attribute__((packed)) {
     uint8_t packet_type;
     uint8_t packet_flags;
     uint16_t command;
@@ -67,10 +64,27 @@ typedef struct __attribute__((packed))
     uint16_t id;
 } gvcp_header_t;
 
+// Protocol result codes
+typedef enum {
+    GVCP_RESULT_SUCCESS = 0,
+    GVCP_RESULT_ERROR = -1,
+    GVCP_RESULT_INVALID_ARG = -2,
+    GVCP_RESULT_INVALID_HEADER = -3,
+    GVCP_RESULT_SEND_FAILED = -4
+} gvcp_result_t;
+
+// Network send callback function type
+typedef gvcp_result_t (*gvcp_send_callback_t)(const void *data, size_t len, void *addr);
+
 // Protocol utility functions
-esp_err_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, struct sockaddr_in *client_addr);
-esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr);
+gvcp_result_t gvcp_send_nack(const gvcp_header_t *original_header, uint16_t error_code, void *client_addr);
+gvcp_result_t gvcp_send_response(const void *data, size_t data_len, void *client_addr);
 bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len);
 void gvcp_create_command_header(gvcp_header_t *cmd, uint16_t command_code, uint16_t size_words, uint16_t packet_id, bool ack_required);
 void gvcp_create_ack_header(gvcp_header_t *ack, const gvcp_header_t *request, uint16_t ack_code, uint16_t size_words);
 uint16_t gvcp_get_ack_command(uint16_t cmd_command);
+
+// Set the network send callback (must be called before using send functions)
+void gvcp_set_send_callback(gvcp_send_callback_t callback);
+
+#endif // GVCP_PROTOCOL_H
