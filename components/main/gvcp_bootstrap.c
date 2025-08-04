@@ -138,7 +138,7 @@ void init_bootstrap_memory(void)
     // This register tells Aravis how often to send heartbeat messages
     write_register_value(&bootstrap_memory[GVBS_HEARTBEAT_TIMEOUT_OFFSET], 3000, 4);
 
-    ESP_LOGI(TAG, "Bootstrap memory initialized with heartbeat timeout 3000ms");
+    PROTOCOL_LOG_I(TAG, "Bootstrap memory initialized with heartbeat timeout 3000ms");
 }
 
 uint8_t *get_bootstrap_memory(void)
@@ -161,7 +161,7 @@ void gvcp_set_control_channel_privilege(uint32_t value)
     if (is_valid_privilege_value(value))
     {
         control_channel_privilege = value;
-        ESP_LOGI(TAG, "Control channel privilege set to 0x%08x", value);
+        PROTOCOL_LOG_I(TAG, "Control channel privilege set to 0x%08x", value);
     }
     else
     {
@@ -177,7 +177,7 @@ uint32_t gvcp_get_control_channel_privilege_key(void)
 void gvcp_set_control_channel_privilege_key(uint32_t value)
 {
     control_channel_privilege_key = value;
-    ESP_LOGI(TAG, "Control channel privilege key set to 0x%08x", value);
+    PROTOCOL_LOG_I(TAG, "Control channel privilege key set to 0x%08x", value);
 }
 
 esp_err_t gvcp_bootstrap_init(void)
@@ -189,6 +189,6 @@ esp_err_t gvcp_bootstrap_init(void)
     // Initialize bootstrap memory
     init_bootstrap_memory();
 
-    ESP_LOGI(TAG, "Bootstrap registers initialized");
+    PROTOCOL_LOG_I(TAG, "Bootstrap registers initialized");
     return ESP_OK;
 }

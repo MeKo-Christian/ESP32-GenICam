@@ -1,9 +1,9 @@
-#pragma once
+#ifndef GENICAM_REGISTERS_H
+#define GENICAM_REGISTERS_H
 
-#include "gvcp_protocol.h"
-#include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // --------------------------------------------------------------------------------
 // Standard GVCP Bootstrap Registers (0x0000xxxx) — GigE Vision Spec
@@ -93,41 +93,68 @@
 #define GENICAM_DISCOVERY_BROADCAST_FAILURES_OFFSET 0x000010BC
 #define GENICAM_DISCOVERY_BROADCAST_SEQUENCE_OFFSET 0x000010C0
 
-// --------------------------------------------------------------------------------
-// Function Declarations
-// --------------------------------------------------------------------------------
+// Result codes
+typedef enum {
+    GENICAM_REGISTERS_SUCCESS = 0,
+    GENICAM_REGISTERS_ERROR = -1,
+    GENICAM_REGISTERS_INVALID_ARG = -2,
+    GENICAM_REGISTERS_INVALID_ADDRESS = -3,
+    GENICAM_REGISTERS_WRITE_PROTECTED = -4,
+    GENICAM_REGISTERS_ACCESS_DENIED = -5
+} genicam_registers_result_t;
 
-// Register access command handlers
-void handle_read_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
-void handle_write_memory_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
-void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr);
-void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int data_len, struct sockaddr_in *client_addr);
-void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, struct sockaddr_in *client_addr);
+// Register access functions
+genicam_registers_result_t genicam_registers_read(uint32_t address, uint32_t *value);
+genicam_registers_result_t genicam_registers_write(uint32_t address, uint32_t value);
+genicam_registers_result_t genicam_registers_read_memory(uint32_t address, uint8_t *buffer, size_t length);
+genicam_registers_result_t genicam_registers_write_memory(uint32_t address, const uint8_t *buffer, size_t length);
 
-// Register validation and utility functions
-bool is_register_address_valid(uint32_t address);
-bool is_register_address_writable(uint32_t address);
-bool is_bootstrap_register(uint32_t address);
-bool is_genicam_register(uint32_t address);
+// Register validation functions
+bool genicam_registers_is_address_valid(uint32_t address);
+bool genicam_registers_is_address_writable(uint32_t address);
+bool genicam_registers_is_bootstrap_register(uint32_t address);
+bool genicam_registers_is_genicam_register(uint32_t address);
 
-// Stream configuration getter functions
-uint32_t gvcp_get_packet_delay_us(void);
-float gvcp_get_frame_rate_fps(void);
-uint32_t gvcp_get_packet_size(void);
-uint32_t gvcp_get_scphost_port(void);
-void gvcp_set_stream_status(uint32_t status);
+// Stream configuration functions
+uint32_t genicam_registers_get_packet_delay_us(void);
+float genicam_registers_get_frame_rate_fps(void);
+uint32_t genicam_registers_get_packet_size(void);
+void genicam_registers_set_stream_status(uint32_t status);
 
 // Standard GVCP register management functions
-uint32_t gvcp_get_tl_params_locked(void);
-void gvcp_set_tl_params_locked(uint32_t locked);
-uint32_t gvcp_get_stream_dest_address(void);
-void gvcp_set_stream_dest_address(uint32_t dest_ip);
+uint32_t genicam_registers_get_tl_params_locked(void);
+void genicam_registers_set_tl_params_locked(uint32_t locked);
+uint32_t genicam_registers_get_stream_dest_address(void);
+void genicam_registers_set_stream_dest_address(uint32_t dest_ip);
 
 // Multipart payload control functions
-bool gvcp_get_multipart_enabled(void);
-void gvcp_set_multipart_enabled(bool enabled);
-uint32_t gvcp_get_multipart_config(void);
-void gvcp_set_multipart_config(uint32_t config);
+bool genicam_registers_get_multipart_enabled(void);
+void genicam_registers_set_multipart_enabled(bool enabled);
+uint32_t genicam_registers_get_multipart_config(void);
+void genicam_registers_set_multipart_config(uint32_t config);
+
+// Camera parameter functions
+uint32_t genicam_registers_get_exposure_time(void);
+void genicam_registers_set_exposure_time(uint32_t exposure_us);
+uint32_t genicam_registers_get_gain(void);
+void genicam_registers_set_gain(uint32_t gain);
+uint32_t genicam_registers_get_pixel_format(void);
+void genicam_registers_set_pixel_format(uint32_t format);
+
+// Statistics functions
+void genicam_registers_increment_total_commands(void);
+void genicam_registers_increment_total_errors(void);
+void genicam_registers_increment_unknown_commands(void);
+uint32_t genicam_registers_get_connection_status(void);
+void genicam_registers_set_connection_status_bit(uint8_t bit, bool value);
 
 // Register access initialization
-esp_err_t gvcp_registers_init(void);
+genicam_registers_result_t genicam_registers_init(void);
+
+// Bootstrap memory callback function type (to access bootstrap registers)
+typedef uint8_t* (*genicam_registers_get_bootstrap_callback_t)(void);
+
+// Set the bootstrap memory callback (must be called before using register functions)
+void genicam_registers_set_bootstrap_callback(genicam_registers_get_bootstrap_callback_t callback);
+
+#endif // GENICAM_REGISTERS_H
