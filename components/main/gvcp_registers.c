@@ -121,6 +121,7 @@ bool is_register_address_valid(uint32_t address)
         address == GVCP_GEV_N_NETWORK_INTERFACES_OFFSET ||
         address == GVCP_GEV_SCP_HOST_PORT_OFFSET ||
         address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET ||
+        address == GVCP_GEV_SCDA_DEST_ADDRESS_OFFSET ||
         address == GVCP_GEVSCCFG_REGISTER_OFFSET ||
         address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
         address == GVCP_GEVSC_CFG_ARAVIS_MULTIPART_OFFSET ||
@@ -166,7 +167,8 @@ bool is_register_address_writable(uint32_t address)
     // Stream Channel Configuration (SCCFG) registers - writable (multipart enable)
     if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET ||
         address == GVCP_GEV_SCP_HOST_PORT_OFFSET ||
-        address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET)
+        address == GVCP_GEV_SCPS_PACKET_SIZE_OFFSET ||
+        address == GVCP_GEV_SCDA_DEST_ADDRESS_OFFSET)
     {
         return true;
     }
@@ -464,6 +466,10 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     {
         write_register_value(out, gvcp_get_stream_dest_address(), size);
     }
+    else if (address == GVCP_GEV_SCDA_DEST_ADDRESS_OFFSET)
+    {
+        write_register_value(out, gvcp_get_stream_dest_address(), size);
+    }
     // Stream Channel Configuration (SCCFG) registers
     else if (address == GVCP_GEVSCCFG_REGISTER_OFFSET)
     {
@@ -745,6 +751,14 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         // Store destination IP address (in network byte order)
         gvcp_set_stream_dest_address(value);
         ESP_LOGI(TAG, "Stream destination address set to: 0x%08x", value);
+        return ESP_OK;
+    }
+
+    if (address == GVCP_GEV_SCDA_DEST_ADDRESS_OFFSET)
+    {
+        // Store destination IP address (in network byte order) - duplicate of 0x0A10
+        gvcp_set_stream_dest_address(value);
+        ESP_LOGI(TAG, "Stream destination address (duplicate) set to: 0x%08x", value);
         return ESP_OK;
     }
 

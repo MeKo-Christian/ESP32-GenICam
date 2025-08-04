@@ -128,11 +128,41 @@ The core implementation is complete and functional. Potential extensions include
 - [x] **Pixel Formats** - Additional formats (RGB565, YUV422, RGB888) + existing (Mono8, JPEG)
 - [x] **Compression** - JPEG streaming support for higher throughput
 
-### Testing & Automation
-- [ ] **Integration Tests** - Scripted testing using `arv-tool` + `tshark` to confirm full handshake + frame delivery
+### Testing
+
+- [ ] **Integration Tests** - Scripted testing using arv-tool + tshark to confirm full handshake + frame delivery
 - [ ] **Protocol Validation** - Automated compliance testing against GenICam/GigE Vision standards
 - [ ] **Performance Benchmarks** - Frame rate and latency measurement tools
 
+#### Phase 1: Code Refactoring for Testability
+
+Goal: Isolate protocol logic from ESP-IDF to enable host-based testing.
+
+- [ ] Extract GVCP, GVSP, and GenICam logic into pure C modules
+- [ ] Create platform_interface_t abstraction layer
+- [ ] Implement platform_host.c and platform_esp32.c
+- [ ] Remove esp_log.h, sockets.h, and other ESP-IDF dependencies from logic
+- [ ] Split register logic and XML generation into independent modules
+
+#### Phase 2: Host Testing Infrastructure
+
+Goal: Add fast, CI-ready unit tests for protocol-level logic.
+
+- [ ] Implement test suite for GVCP, bootstrap, registers, and XML
+- [ ] Create Makefile with run-tests and clean targets
+- [ ] Add test data + mocks (e.g., mock_network.c)
+- [ ] Integrate with just test-host and GitHub Actions
+- [ ] Add code coverage tracking and regression detection
+
+#### Phase 3: ESP-IDF Integration & Protocol Validation
+
+Goal: Validate real hardware functionality and GigE Vision compliance.
+
+- [ ] Write Unity-based tests for WiFi, camera, and GVCP socket creation
+- [ ] Script integration tests using arv-tool + tshark
+- [ ] Automate Aravis discovery, feature access, and frame capture validation
+- [ ] Measure streaming latency and frame rate in GVSP path
+- [ ] Add protocol compliance checklist against GenICam/GigE Vision spec
 
 ### Interface & Usability
 - [x] **Web Configuration** - Browser-based camera parameter adjustment
