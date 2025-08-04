@@ -83,7 +83,7 @@ void generate_device_uuid(uint8_t *uuid_out, const uint8_t *mac, const char *ser
     uuid_words[2] = htonl(simple_hash(input_buffer, offset, 0xFEDCBA98));
     uuid_words[3] = htonl(simple_hash(input_buffer, offset, 0x76543210));
 
-    ESP_LOGI(TAG, "Generated device UUID from MAC + model + version + chip features");
+    PROTOCOL_LOG_I(TAG, "Generated device UUID from MAC + model + version + chip features");
     PROTOCOL_LOG_BUFFER_HEX(TAG, uuid_out, 16, ESP_LOG_INFO);
 }
 
@@ -108,15 +108,15 @@ static esp_err_t send_discovery_internal(uint16_t packet_id, struct sockaddr_in 
         memcpy(&response[sizeof(gvcp_header_t)], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
 
         PROTOCOL_LOG_I(TAG, "GigE Vision SPEC: Sending discovery response to %s:%d with packet ID=0x%04x",
-                 ip_str, ntohs(dest_addr->sin_port), ntohs(packet_id));
+                       ip_str, ntohs(dest_addr->sin_port), ntohs(packet_id));
 
         // Use gvcp_sendto for consistent error handling and socket management
         esp_err_t result = gvcp_sendto(response, sizeof(response), dest_addr);
 
         if (result == ESP_OK)
         {
-            ESP_LOGI(TAG, "GigE Vision SPEC: Discovery response sent (%d bytes) from port 3956", sizeof(response));
-            ESP_LOGI(TAG, "GigE Vision SPEC: Compliant response: device:3956 -> client:%d", ntohs(dest_addr->sin_port));
+            PROTOCOL_LOG_I(TAG, "GigE Vision SPEC: Discovery response sent (%d bytes) from port 3956", sizeof(response));
+            PROTOCOL_LOG_I(TAG, "GigE Vision SPEC: Compliant response: device:3956 -> client:%d", ntohs(dest_addr->sin_port));
 
             // Set GVSP client address for streaming
             gvsp_set_client_address(dest_addr);
@@ -125,7 +125,7 @@ static esp_err_t send_discovery_internal(uint16_t packet_id, struct sockaddr_in 
         }
         else
         {
-            ESP_LOGW(TAG, "Discovery response send failed");
+            PROTOCOL_LOG_W(TAG, "Discovery response send failed");
         }
 
         return result;
@@ -151,8 +151,8 @@ static esp_err_t send_discovery_internal(uint16_t packet_id, struct sockaddr_in 
         uint8_t *bootstrap_memory = get_bootstrap_memory();
         memcpy(&response[8], bootstrap_memory, GVBS_DISCOVERY_DATA_SIZE);
 
-        ESP_LOGI(TAG, "Sending discovery response to %s:%d (ID: 0x%04x, raw format)",
-                 ip_str, ntohs(dest_addr->sin_port), ntohs(packet_id));
+        PROTOCOL_LOG_I(TAG, "Sending discovery response to %s:%d (ID: 0x%04x, raw format)",
+                       ip_str, ntohs(dest_addr->sin_port), ntohs(packet_id));
 
         // Use gvcp_sendto for consistent error handling
         return gvcp_sendto(response, sizeof(response), dest_addr);
@@ -179,7 +179,7 @@ esp_err_t send_discovery_response(const gvcp_header_t *request_header, struct so
         // Unsolicited broadcast - use current sequence number (incremented per packet)
         packet_id = htons(discovery_broadcast_sequence & 0xFFFF);
         PROTOCOL_LOG_I(TAG, "UNSOLICITED Broadcast: using sequence=%d as unique packet ID=0x%04x",
-                 discovery_broadcast_sequence, ntohs(packet_id));
+                       discovery_broadcast_sequence, ntohs(packet_id));
     }
 
     // Use raw header format for broadcasts (legacy client compatibility)
@@ -191,12 +191,12 @@ void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in *clien
     uint16_t request_id = ntohs(header->id);
     char ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &client_addr->sin_addr, ip_str, sizeof(ip_str));
-    ESP_LOGI(TAG, "Discovery SOLICITED from %s:%d, request ID:0x%04x (raw:0x%04x) - MUST echo back exactly",
-             ip_str, ntohs(client_addr->sin_port), request_id, header->id);
+    PROTOCOL_LOG_I(TAG, "Discovery SOLICITED from %s:%d, request ID:0x%04x (raw:0x%04x) - MUST echo back exactly",
+                   ip_str, ntohs(client_addr->sin_port), request_id, header->id);
 
     // PORT TRACKING: Log the client address before calling response function
-    ESP_LOGI(TAG, "PORT TRACK 3: client_addr->sin_port = 0x%04x (%d) in handle_discovery_cmd",
-             client_addr->sin_port, ntohs(client_addr->sin_port));
+    PROTOCOL_LOG_I(TAG, "PORT TRACK 3: client_addr->sin_port = 0x%04x (%d) in handle_discovery_cmd",
+                   client_addr->sin_port, ntohs(client_addr->sin_port));
 
     // EXPLICIT: Create and send discovery response with exact packet ID echo
     send_gige_spec_discovery_response(header->id, client_addr);
@@ -255,7 +255,7 @@ esp_err_t send_discovery_broadcast(void)
 
         if (result != ESP_OK)
         {
-            ESP_LOGW(TAG, "Failed to send discovery announcement to %s after %d retries", target_ips[i], discovery_broadcast_retries);
+            PROTOCOL_LOG_W(TAG, "Failed to send discovery announcement to %s after %d retries", target_ips[i], discovery_broadcast_retries);
         }
     }
 
@@ -267,7 +267,7 @@ esp_err_t send_discovery_broadcast(void)
     else
     {
         PROTOCOL_LOG_I(TAG, "Discovery announcements sent successfully (broadcast cycle #%d, packets %d-%d)",
-                 broadcast_cycle, broadcast_cycle, discovery_broadcast_sequence);
+                       broadcast_cycle, broadcast_cycle, discovery_broadcast_sequence);
     }
 
     return any_success;
@@ -277,7 +277,7 @@ esp_err_t send_discovery_broadcast(void)
 void gvcp_enable_discovery_broadcast(bool enable)
 {
     discovery_broadcast_enabled = enable;
-    ESP_LOGI(TAG, "Discovery broadcast %s", enable ? "enabled" : "disabled");
+    PROTOCOL_LOG_I(TAG, "Discovery broadcast %s", enable ? "enabled" : "disabled");
 }
 
 void gvcp_set_discovery_broadcast_interval(uint32_t interval_ms)
@@ -285,7 +285,7 @@ void gvcp_set_discovery_broadcast_interval(uint32_t interval_ms)
     if (interval_ms >= 1000 && interval_ms <= 30000)
     {
         discovery_broadcast_interval_ms = interval_ms;
-        ESP_LOGI(TAG, "Discovery broadcast interval set to %d ms", interval_ms);
+        PROTOCOL_LOG_I(TAG, "Discovery broadcast interval set to %d ms", interval_ms);
     }
     else
     {
@@ -308,7 +308,7 @@ esp_err_t gvcp_trigger_discovery_broadcast(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "Triggering immediate discovery broadcast");
+    PROTOCOL_LOG_I(TAG, "Triggering immediate discovery broadcast");
     esp_err_t result = send_discovery_broadcast();
     if (result == ESP_OK)
     {

@@ -114,6 +114,7 @@ bool is_genicam_register(uint32_t address);
 uint32_t gvcp_get_packet_delay_us(void);
 float gvcp_get_frame_rate_fps(void);
 uint32_t gvcp_get_packet_size(void);
+uint32_t gvcp_get_scphost_port(void);
 void gvcp_set_stream_status(uint32_t status);
 
 // Standard GVCP register management functions

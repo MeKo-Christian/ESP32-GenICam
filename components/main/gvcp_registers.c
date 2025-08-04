@@ -210,6 +210,11 @@ uint32_t gvcp_get_packet_size(void)
     return packet_size;
 }
 
+uint32_t gvcp_get_scphost_port(void)
+{
+    return scphost_port;
+}
+
 void gvcp_set_stream_status(uint32_t status)
 {
     stream_status = status;
@@ -473,7 +478,7 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     // Stream Channel Configuration (SCCFG) registers
     else if (address == GVCP_GEVSCCFG_REGISTER_OFFSET)
     {
-        ESP_LOGI(TAG, "Reading GevSCCfg (0x%08x): returning 0x%08x", address, sccfg_register);
+        PROTOCOL_LOG_I(TAG, "Reading GevSCCfg (0x%08x): returning 0x%08x", address, sccfg_register);
         write_register_value(out, sccfg_register, size);
     }
     else if (address == GVCP_GEVSC_CFG_MULTIPART_OFFSET)
@@ -482,12 +487,12 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     }
     else if (address == GVCP_GEV_N_STREAM_CHANNELS_OFFSET)
     {
-        ESP_LOGI(TAG, "Reading GevStreamChannelCount (0x%08x): returning %d", address, stream_channel_count);
+        PROTOCOL_LOG_I(TAG, "Reading GevStreamChannelCount (0x%08x): returning %d", address, stream_channel_count);
         write_register_value(out, stream_channel_count, size);
     }
     else if (address == GVCP_GEV_N_NETWORK_INTERFACES_OFFSET)
     {
-        ESP_LOGI(TAG, "Reading GevNumberOfNetworkInterfaces (0x%08x): returning %d", address, num_network_interfaces);
+        PROTOCOL_LOG_I(TAG, "Reading GevNumberOfNetworkInterfaces (0x%08x): returning %d", address, num_network_interfaces);
         write_register_value(out, num_network_interfaces, size);
     }
     else if (address == GVCP_GEV_SCP_HOST_PORT_OFFSET)
@@ -502,24 +507,24 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     {
         // Return 1 MHz (1000000 Hz) tick frequency for ESP32 microsecond timer resolution
         uint32_t tick_frequency = 1000000;
-        ESP_LOGI(TAG, "Reading GevTimestampTickFrequency (0x%08x): returning %d Hz", address, tick_frequency);
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampTickFrequency (0x%08x): returning %d Hz", address, tick_frequency);
         write_register_value(out, tick_frequency, size);
     }
     else if (address == GVCP_GEVSC_CFG_ARAVIS_MULTIPART_OFFSET)
     {
-        ESP_LOGI(TAG, "Reading ArvGevSCCFGMultipartReg (0x%08x): returning 0x%08x", address, aravis_multipart_reg);
+        PROTOCOL_LOG_I(TAG, "Reading ArvGevSCCFGMultipartReg (0x%08x): returning 0x%08x", address, aravis_multipart_reg);
         write_register_value(out, aravis_multipart_reg, size);
     }
     else if (address == GVCP_GEVSC_CFG_CAP_MULTIPART_OFFSET)
     {
-        ESP_LOGI(TAG, "Reading ArvGevSCCAPMultipartReg (0x%08x): returning 0x%08x", address, aravis_multipart_cap);
+        PROTOCOL_LOG_I(TAG, "Reading ArvGevSCCAPMultipartReg (0x%08x): returning 0x%08x", address, aravis_multipart_cap);
         write_register_value(out, aravis_multipart_cap, size);
     }
     else if (address == GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET)
     {
         // GevTimestampControlLatch: return 0 (no latching behavior implemented)
         uint32_t timestamp_control = 0;
-        ESP_LOGI(TAG, "Reading GevTimestampControlLatch (0x%08x): returning %d", address, timestamp_control);
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampControlLatch (0x%08x): returning %d", address, timestamp_control);
         write_register_value(out, timestamp_control, size);
     }
     else if (address == GVCP_GEV_TIMESTAMP_VALUE_HIGH_OFFSET)
@@ -527,7 +532,7 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
         // GevTimestampValue: return current timestamp in microseconds (aligned with tick frequency)
         uint64_t timestamp_us = esp_timer_get_time();
         uint32_t timestamp_value = (uint32_t)(timestamp_us & 0xFFFFFFFF); // Use lower 32 bits
-        ESP_LOGI(TAG, "Reading GevTimestampValue (0x%08x): returning %u us", address, timestamp_value);
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampValue (0x%08x): returning %u us", address, timestamp_value);
         write_register_value(out, timestamp_value, size);
     }
     else
@@ -786,7 +791,7 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
         if (value >= 576 && value <= 9000)
         {
             scps_packet_size = value;
-            ESP_LOGI(TAG, "Stream channel packet size set to: %d", value);
+            PROTOCOL_LOG_I(TAG, "Stream channel packet size set to: %d", value);
             return ESP_OK;
         }
         ESP_LOGW(TAG, "Invalid stream channel packet size: %d (must be 576-9000)", value);
@@ -1231,7 +1236,7 @@ void handle_readreg_cmd(const gvcp_header_t *header, const uint8_t *data, int da
     }
     else
     {
-        ESP_LOGI(TAG, "Successfully sent READREG ACK with %d registers", num_registers);
+        PROTOCOL_LOG_I(TAG, "Successfully sent READREG ACK with %d registers", num_registers);
     }
 }
 
@@ -1280,7 +1285,7 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
     }
 
     int num_registers = data_len / 8;
-    ESP_LOGI(TAG, "WRITEREG request: %d address-value pairs", num_registers);
+    PROTOCOL_LOG_I(TAG, "WRITEREG request: %d address-value pairs", num_registers);
 
     // Hex dump of payload data for debugging
     if (data_len > 0)
@@ -1380,7 +1385,7 @@ void handle_writereg_cmd(const gvcp_header_t *header, const uint8_t *data, int d
     }
     else
     {
-        ESP_LOGI(TAG, "Successfully sent WRITEREG ACK with %d registers", num_registers);
+        PROTOCOL_LOG_I(TAG, "Successfully sent WRITEREG ACK with %d registers", num_registers);
     }
 }
 
@@ -1406,7 +1411,7 @@ void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, s
     uint32_t stream_channel_index = ntohl(*(uint32_t *)data);
     uint32_t block_id = ntohl(*(uint32_t *)(data + 4));
 
-    ESP_LOGI(TAG, "Packet resend request: stream=%d, block_id=%d", stream_channel_index, block_id);
+    PROTOCOL_LOG_I(TAG, "Packet resend request: stream=%d, block_id=%d", stream_channel_index, block_id);
 
     // Validate stream channel (we only support channel 0)
     if (stream_channel_index != 0)
@@ -1457,7 +1462,7 @@ void handle_packetresend_cmd(const gvcp_header_t *header, const uint8_t *data, s
     }
     else
     {
-        ESP_LOGI(TAG, "Sent packet resend ACK for block_id %d", block_id);
+        PROTOCOL_LOG_I(TAG, "Sent packet resend ACK for block_id %d", block_id);
     }
 }
 
@@ -1492,7 +1497,7 @@ esp_err_t gvcp_registers_init(void)
     aravis_multipart_reg = 0; // Aravis multipart configuration
     aravis_multipart_cap = 0; // Aravis multipart capabilities
 
-    ESP_LOGI(TAG, "Register access module initialized with standard GVCP registers and SCCFG support");
+    PROTOCOL_LOG_I(TAG, "Register access module initialized with standard GVCP registers and SCCFG support");
     ESP_LOGI(TAG, "Stream channels: %d, Network interfaces: %d", stream_channel_count, num_network_interfaces);
     return ESP_OK;
 }
