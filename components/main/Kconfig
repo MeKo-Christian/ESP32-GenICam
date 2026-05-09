@@ -141,4 +141,34 @@ menu "ESP32-CAM GenICam Configuration"
                 The GenICam protocol will still work without the web server.
     endmenu
 
+    menu "Reliability Tuning"
+        config GVSP_CLIENT_IDLE_TIMEOUT_MS
+            int "GVSP client idle timeout (ms)"
+            default 10000
+            range 1000 60000
+            help
+                Time without any client activity (GVCP traffic from the streaming
+                peer) after which streaming is soft-stopped. After three
+                consecutive idle ticks the device enters recovery mode and
+                clears the cached client address.
+
+                Aravis sends GVCP heartbeats every ~3 s by default. The default
+                10000 ms tolerates one missed heartbeat under WiFi congestion
+                without triggering a soft-stop. Lower values (e.g. 5000) cut
+                vanished-client recovery time but make the device sensitive to
+                back-to-back heartbeat losses; raise above 10000 only on very
+                lossy networks.
+
+        config GVSP_FRAME_RING_DEPTH
+            int "GVSP frame ring depth"
+            default 8
+            range 1 32
+            help
+                Number of past frames cached for GVCP PACKETRESEND requests.
+                At 25 FPS, depth 8 gives a ~320 ms resend window. Each slot
+                holds one full frame (allocated from PSRAM when available, with
+                a fall-back to internal RAM); raise this only if PSRAM has
+                room. Default 8.
+    endmenu
+
 endmenu
