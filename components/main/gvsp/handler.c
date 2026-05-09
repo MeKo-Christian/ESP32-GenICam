@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 // Include sys/socket.h for struct sockaddr_in in header
 #include <sys/socket.h>
 
@@ -33,7 +34,11 @@ static SemaphoreHandle_t streaming_mutex = NULL;
 static struct sockaddr_in client_addr;
 static bool client_addr_set = false;
 static uint32_t last_client_activity = 0;
-static uint32_t client_timeout_ms = 30000; // 30 second timeout
+#ifdef CONFIG_GVSP_CLIENT_IDLE_TIMEOUT_MS
+static uint32_t client_timeout_ms = CONFIG_GVSP_CLIENT_IDLE_TIMEOUT_MS;
+#else
+static uint32_t client_timeout_ms = 10000;
+#endif
 
 // Enhanced timeout and recovery management
 static uint32_t last_heartbeat_check = 0;
@@ -50,8 +55,14 @@ static uint32_t max_socket_errors = 5;
 static uint32_t last_socket_recreation = 0;
 static uint32_t socket_recreation_interval_ms = 10000; // Min 10s between recreations
 
-// Frame buffer ring for resend capability
-#define FRAME_RING_BUFFER_SIZE 3
+// Frame buffer ring for resend capability. Depth is Kconfig-tunable; the
+// per-slot frame copy is allocated from PSRAM when available because at
+// realistic resolutions a deep ring will not fit in DRAM.
+#ifdef CONFIG_GVSP_FRAME_RING_DEPTH
+#define FRAME_RING_BUFFER_SIZE CONFIG_GVSP_FRAME_RING_DEPTH
+#else
+#define FRAME_RING_BUFFER_SIZE 8
+#endif
 typedef struct
 {
     uint8_t *data;
@@ -68,6 +79,18 @@ static frame_ring_entry_t frame_ring[FRAME_RING_BUFFER_SIZE];
 static uint8_t frame_ring_head = 0;
 static uint32_t frames_stored = 0;
 static SemaphoreHandle_t frame_ring_mutex = NULL;
+
+// Prefer PSRAM (SPIRAM) for the frame copy; fall back to internal RAM if PSRAM
+// allocation fails or is unavailable. Same lifetime semantics as malloc/free.
+static uint8_t *gvsp_ring_alloc(size_t size)
+{
+    uint8_t *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == NULL)
+    {
+        p = malloc(size);
+    }
+    return p;
+}
 
 // Frame sequence tracking and validation
 static uint32_t expected_frame_sequence = 1;
@@ -164,7 +187,7 @@ esp_err_t gvsp_init(void)
     frame_ring_head = 0;
     frames_stored = 0;
 
-    ESP_LOGI(TAG, "Frame ring buffer initialized with %d slots", FRAME_RING_BUFFER_SIZE);
+    ESP_LOGI(TAG, "Frame ring buffer initialized with %d slots (PSRAM-preferred)", FRAME_RING_BUFFER_SIZE);
 
     return ESP_OK;
 }
@@ -265,11 +288,11 @@ static esp_err_t gvsp_store_frame_in_ring(local_camera_fb_t *fb, uint32_t block_
         slot->data = NULL;
     }
 
-    // Allocate and copy frame data
-    slot->data = malloc(fb->len);
+    // Allocate and copy frame data (PSRAM preferred, DRAM fallback).
+    slot->data = gvsp_ring_alloc(fb->len);
     if (slot->data == NULL)
     {
-        ESP_LOGE(TAG, "Failed to allocate memory for frame ring entry");
+        ESP_LOGE(TAG, "Failed to allocate %u bytes for frame ring entry", (unsigned)fb->len);
         xSemaphoreGive(frame_ring_mutex);
         return ESP_ERR_NO_MEM;
     }
@@ -835,6 +858,7 @@ esp_err_t gvsp_send_frame(local_camera_fb_t *fb)
 
     uint32_t total_packets = (fb->len + configured_packet_size - 1) / configured_packet_size + 2;
     PROTOCOL_LOG_I(TAG, "Frame sent successfully: %d packets, block_id=%d", total_packets, block_id);
+    (void)total_packets; // referenced only inside PROTOCOL_LOG_I, may compile out
 
     // Update stream status with success
     gvcp_set_stream_status(0x0001); // Active streaming bit
@@ -1049,9 +1073,14 @@ static esp_err_t gvsp_check_recovery_timeout(void)
         if (current_time - recovery_start_time > recovery_timeout_ms)
         {
             ESP_LOGE(TAG, "Recovery timeout exceeded, resetting connection state");
-            // Force reset
-            connection_failures = 0;
-            recovery_mode = false;
+            // gvsp_clear_client_address() resets streaming_active, client_addr_set,
+            // connection_failures, recovery_mode, status bits, and stream status.
+            // In the normal flow gvsp_handle_connection_failure() already cleared
+            // client_addr on the way into recovery, so this is usually a no-op —
+            // but routing through one canonical cleanup keeps the post-recovery
+            // state consistent if any future code path enters recovery without
+            // first clearing client state.
+            gvsp_clear_client_address();
             return ESP_ERR_TIMEOUT;
         }
     }

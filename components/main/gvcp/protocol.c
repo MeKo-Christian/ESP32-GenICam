@@ -14,6 +14,34 @@ extern int sock;
 // Socket error tracking
 static uint32_t gvcp_socket_error_count = 0;
 static uint32_t gvcp_max_socket_errors = 3;
+static volatile bool gvcp_socket_recreate_pending = false;
+
+// Bump the error counter; flag a recreate request once the threshold is crossed.
+// Both the sendto helper below and the gvcp_task recvfrom loop call this.
+static void gvcp_note_socket_error(void)
+{
+    gvcp_socket_error_count++;
+    if (gvcp_socket_error_count >= gvcp_max_socket_errors)
+    {
+        gvcp_socket_recreate_pending = true;
+    }
+}
+
+void gvcp_increment_socket_errors(void)
+{
+    gvcp_note_socket_error();
+}
+
+bool gvcp_socket_recreate_pending_get(void)
+{
+    return gvcp_socket_recreate_pending;
+}
+
+void gvcp_socket_recreate_done(void)
+{
+    gvcp_socket_recreate_pending = false;
+    gvcp_socket_error_count = 0;
+}
 
 // Helper function for GVCP sendto with error handling
 esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *client_addr)
@@ -21,7 +49,7 @@ esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *cli
     if (sock < 0)
     {
         ESP_LOGE(TAG, "Invalid GVCP socket for transmission");
-        gvcp_socket_error_count++;
+        gvcp_note_socket_error();
         return ESP_FAIL;
     }
 
@@ -36,12 +64,12 @@ esp_err_t gvcp_sendto(const void *data, size_t data_len, struct sockaddr_in *cli
     if (bytes_sent < 0)
     {
         ESP_LOGE(TAG, "GVCP sendto failed: errno %d (%s)", errno, strerror(errno));
-        gvcp_socket_error_count++;
+        gvcp_note_socket_error();
 
-        // Check if we should recreate socket due to persistent errors
-        if (gvcp_socket_error_count >= gvcp_max_socket_errors)
+        if (gvcp_socket_recreate_pending)
         {
-            ESP_LOGW(TAG, "GVCP socket error count reached %d, considering recreation", gvcp_socket_error_count);
+            ESP_LOGW(TAG, "GVCP socket error count reached %u, requesting socket recreation",
+                     (unsigned)gvcp_socket_error_count);
         }
 
         return ESP_FAIL;

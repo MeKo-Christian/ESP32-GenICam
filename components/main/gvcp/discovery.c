@@ -193,6 +193,7 @@ void handle_discovery_cmd(const gvcp_header_t *header, struct sockaddr_in *clien
     inet_ntop(AF_INET, &client_addr->sin_addr, ip_str, sizeof(ip_str));
     PROTOCOL_LOG_I(TAG, "Discovery SOLICITED from %s:%d, request ID:0x%04x (raw:0x%04x) - MUST echo back exactly",
                    ip_str, ntohs(client_addr->sin_port), request_id, header->id);
+    (void)request_id; // referenced only inside PROTOCOL_LOG_I, may compile out
 
     // PORT TRACKING: Log the client address before calling response function
     PROTOCOL_LOG_I(TAG, "PORT TRACK 3: client_addr->sin_port = 0x%04x (%d) in handle_discovery_cmd",

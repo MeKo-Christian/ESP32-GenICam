@@ -36,10 +36,94 @@ int sock = -1; // Made non-static for module access
 // Bit 0: GVCP socket active
 static uint32_t connection_status = 0;
 
+// Rate-limit socket recreations so a stuck error path can't pin the CPU.
+// Mirrors the GVSP-side rate limit at gvsp/handler.c.
+static uint32_t last_gvcp_socket_recreation = 0;
+#define GVCP_SOCKET_RECREATION_INTERVAL_MS 10000
+
+// Apply the listening-socket setup (broadcast, reuseaddr, rcvtimeo, bind).
+// Returns ESP_OK on success; on failure the caller is responsible for cleanup.
+static esp_err_t gvcp_configure_listen_socket(int s)
+{
+    int broadcast = 1;
+    if (setsockopt(s, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0)
+    {
+        ESP_LOGE(TAG, "Failed to set socket broadcast option");
+        return ESP_FAIL;
+    }
+
+    int reuse = 1;
+    if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+    {
+        ESP_LOGW(TAG, "Failed to set socket reuse option (non-critical)");
+    }
+
+    struct timeval timeout = { .tv_sec = 0, .tv_usec = 500000 };
+    if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
+    {
+        ESP_LOGE(TAG, "Failed to set socket receive timeout");
+        return ESP_FAIL;
+    }
+
+    struct sockaddr_in dest_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(GVCP_PORT),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+    if (bind(s, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0)
+    {
+        ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+// Tear down and rebuild the GVCP listen socket after persistent errors. Without this
+// the device can go silent on the network because lwIP doesn't always recover a
+// permanently-failed UDP socket on its own.
+static esp_err_t gvcp_recreate_socket(void)
+{
+    uint32_t now = esp_log_timestamp();
+    if (now - last_gvcp_socket_recreation < GVCP_SOCKET_RECREATION_INTERVAL_MS)
+    {
+        ESP_LOGW(TAG, "GVCP socket recreation rate limited, skipping");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGW(TAG, "Recreating GVCP socket due to persistent errors");
+
+    if (sock >= 0)
+    {
+        close(sock);
+        sock = -1;
+        connection_status &= ~0x01;
+    }
+
+    int new_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (new_sock < 0)
+    {
+        ESP_LOGE(TAG, "Unable to recreate GVCP socket: errno %d", errno);
+        return ESP_FAIL;
+    }
+
+    if (gvcp_configure_listen_socket(new_sock) != ESP_OK)
+    {
+        close(new_sock);
+        return ESP_FAIL;
+    }
+
+    sock = new_sock;
+    last_gvcp_socket_recreation = now;
+    connection_status |= 0x01;
+    gvcp_socket_recreate_done();
+
+    ESP_LOGI(TAG, "GVCP socket successfully recreated and bound to port %d", GVCP_PORT);
+    return ESP_OK;
+}
+
 esp_err_t gvcp_init(void)
 {
-    struct sockaddr_in dest_addr;
-
     // Validate GenICam XML data before initialization
     ESP_LOGI(TAG, "Validating GenICam XML data...");
     if (genicam_xml_size == 0)
@@ -57,10 +141,6 @@ esp_err_t gvcp_init(void)
     gvcp_discovery_init();
     gvcp_registers_init();
 
-    dest_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(GVCP_PORT);
-
     sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0)
     {
@@ -69,38 +149,10 @@ esp_err_t gvcp_init(void)
     }
     ESP_LOGI(TAG, "Socket created");
 
-    // Enable broadcast for both sending and receiving
-    int broadcast = 1;
-    if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0)
+    if (gvcp_configure_listen_socket(sock) != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to set socket broadcast option");
         close(sock);
-        return ESP_FAIL;
-    }
-
-    // Enable address reuse for better broadcast handling
-    int reuse = 1;
-    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
-    {
-        ESP_LOGW(TAG, "Failed to set socket reuse option (non-critical)");
-    }
-
-    // Set socket receive timeout to allow responsive broadcasts
-    struct timeval timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 500000; // 500ms for responsive broadcast timing
-    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
-    {
-        ESP_LOGE(TAG, "Failed to set socket receive timeout");
-        close(sock);
-        return ESP_FAIL;
-    }
-
-    int err = bind(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-    if (err < 0)
-    {
-        ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
-        close(sock);
+        sock = -1;
         return ESP_FAIL;
     }
     PROTOCOL_LOG_I(TAG, "Socket bound to port %d", GVCP_PORT);
@@ -145,6 +197,7 @@ void handle_gvcp_packet(const uint8_t *packet, int len, struct sockaddr_in *clie
     uint16_t command = ntohs(header->command);
 
     PROTOCOL_LOG_I(TAG, "Command field: raw=0x%04x -> converted=0x%04x", command_raw, command);
+    (void)command_raw; // referenced only inside PROTOCOL_LOG_I, may compile out
 
     // Validate command is in expected GVCP range
     bool valid_command = false;
@@ -285,7 +338,13 @@ void gvcp_task(void *pvParameters)
     {
         // Feed the watchdog to prevent timeout
         esp_task_wdt_reset();
-        // Socket error handling moved to protocol module
+
+        // If the protocol module flagged a socket failure, rebuild before reading.
+        // gvcp_recreate_socket() rate-limits internally so this is safe to call hot.
+        if (gvcp_socket_recreate_pending_get())
+        {
+            gvcp_recreate_socket();
+        }
 
         int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
 
@@ -300,6 +359,7 @@ void gvcp_task(void *pvParameters)
             else
             {
                 ESP_LOGE(TAG, "GVCP recvfrom failed: errno %d (%s)", errno, strerror(errno));
+                gvcp_increment_socket_errors();
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }

@@ -74,3 +74,10 @@ bool gvcp_validate_packet_header(const gvcp_header_t *header, int packet_len);
 void gvcp_create_command_header(gvcp_header_t *cmd, uint16_t command_code, uint16_t size_words, uint16_t packet_id, bool ack_required);
 void gvcp_create_ack_header(gvcp_header_t *ack, const gvcp_header_t *request, uint16_t ack_code, uint16_t size_words);
 uint16_t gvcp_get_ack_command(uint16_t cmd_command);
+
+// Socket health: bumped from the recvfrom path; protocol.c bumps from sendto internally.
+void gvcp_increment_socket_errors(void);
+// True once the error counter has crossed its threshold and the socket should be rebuilt.
+bool gvcp_socket_recreate_pending_get(void);
+// Called by the handler task after it has successfully rebuilt the socket.
+void gvcp_socket_recreate_done(void);

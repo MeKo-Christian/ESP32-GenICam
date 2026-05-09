@@ -81,6 +81,11 @@ static uint32_t scps_packet_size = 1400;    // 0x0D04 - Stream channel packet si
 static uint32_t aravis_multipart_reg = 0; // 0x0D30 - ArvGevSCCFGMultipartReg
 static uint32_t aravis_multipart_cap = 0; // 0x0D34 - ArvGevSCCAPMultipartReg
 
+// GenICam timestamp latch state. Writing 1 to GevTimestampControlLatch snapshots
+// the current esp_timer counter (microseconds) into latched_timestamp_us;
+// reads of GevTimestampLatchedValueHigh/Low return that snapshot.
+static uint64_t latched_timestamp_us = 0;
+
 // Register validation functions
 bool is_register_address_valid(uint32_t address)
 {
@@ -110,7 +115,10 @@ bool is_register_address_valid(uint32_t address)
 
     // GigE Vision Timestamp registers
     if (address == GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET ||
-        address == GVCP_GEV_TIMESTAMP_VALUE_HIGH_OFFSET)
+        address == GVCP_GEV_TIMESTAMP_VALUE_HIGH_OFFSET ||
+        address == GVCP_GEV_TIMESTAMP_VALUE_LOW_OFFSET ||
+        address == GVCP_GEV_TIMESTAMP_TICK_FREQ_HIGH_OFFSET ||
+        address == GVCP_GEV_TIMESTAMP_TICK_FREQ_LOW_OFFSET)
     {
         return true;
     }
@@ -159,7 +167,8 @@ bool is_register_address_writable(uint32_t address)
     if (address == GVCP_TL_PARAMS_LOCKED_OFFSET ||
         address == GENICAM_PACKET_SIZE_OFFSET ||
         address == GENICAM_PACKET_DELAY_OFFSET ||
-        address == GVCP_GEVSCDA_DEST_ADDRESS_OFFSET)
+        address == GVCP_GEVSCDA_DEST_ADDRESS_OFFSET ||
+        address == GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET)
     {
         return true;
     }
@@ -505,9 +514,14 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     }
     else if (address == GVCP_GEV_TIMESTAMP_TICK_FREQ_HIGH_OFFSET)
     {
-        // Return 1 MHz (1000000 Hz) tick frequency for ESP32 microsecond timer resolution
-        uint32_t tick_frequency = 1000000;
-        PROTOCOL_LOG_I(TAG, "Reading GevTimestampTickFrequency (0x%08x): returning %d Hz", address, tick_frequency);
+        // 64-bit tick frequency split: 1 MHz fits in 32 bits, so high word is 0.
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampTickFrequencyHigh (0x%08x): returning 0", address);
+        write_register_value(out, 0, size);
+    }
+    else if (address == GVCP_GEV_TIMESTAMP_TICK_FREQ_LOW_OFFSET)
+    {
+        uint32_t tick_frequency = 1000000; // ESP32 esp_timer is microsecond-resolution
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampTickFrequencyLow (0x%08x): returning %u Hz", address, tick_frequency);
         write_register_value(out, tick_frequency, size);
     }
     else if (address == GVCP_GEVSC_CFG_ARAVIS_MULTIPART_OFFSET)
@@ -522,18 +536,21 @@ static bool handle_read_memory_cmd_inline(uint32_t address, uint32_t size, uint8
     }
     else if (address == GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET)
     {
-        // GevTimestampControlLatch: return 0 (no latching behavior implemented)
-        uint32_t timestamp_control = 0;
-        PROTOCOL_LOG_I(TAG, "Reading GevTimestampControlLatch (0x%08x): returning %d", address, timestamp_control);
-        write_register_value(out, timestamp_control, size);
+        // ControlLatch is a strobe — reads always return 0 per GigE Vision spec.
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampControlLatch (0x%08x): returning 0", address);
+        write_register_value(out, 0, size);
     }
     else if (address == GVCP_GEV_TIMESTAMP_VALUE_HIGH_OFFSET)
     {
-        // GevTimestampValue: return current timestamp in microseconds (aligned with tick frequency)
-        uint64_t timestamp_us = esp_timer_get_time();
-        uint32_t timestamp_value = (uint32_t)(timestamp_us & 0xFFFFFFFF); // Use lower 32 bits
-        PROTOCOL_LOG_I(TAG, "Reading GevTimestampValue (0x%08x): returning %u us", address, timestamp_value);
-        write_register_value(out, timestamp_value, size);
+        uint32_t value_high = (uint32_t)(latched_timestamp_us >> 32);
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampLatchedValueHigh (0x%08x): returning 0x%08x", address, value_high);
+        write_register_value(out, value_high, size);
+    }
+    else if (address == GVCP_GEV_TIMESTAMP_VALUE_LOW_OFFSET)
+    {
+        uint32_t value_low = (uint32_t)(latched_timestamp_us & 0xFFFFFFFF);
+        PROTOCOL_LOG_I(TAG, "Reading GevTimestampLatchedValueLow (0x%08x): returning 0x%08x", address, value_low);
+        write_register_value(out, value_low, size);
     }
     else
     {
@@ -596,6 +613,21 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
     if (address == GENICAM_ACQUISITION_MODE_OFFSET)
     {
         acquisition_mode = value;
+        return ESP_OK;
+    }
+
+    // Timestamp control: writing 1 latches the current 64-bit microsecond
+    // counter into latched_timestamp_us so subsequent reads of
+    // GevTimestampLatchedValueHigh/Low return a consistent pair.
+    if (address == GVCP_GEV_TIMESTAMP_CONTROL_LATCH_OFFSET)
+    {
+        if (value & 0x1)
+        {
+            latched_timestamp_us = (uint64_t)esp_timer_get_time();
+            PROTOCOL_LOG_I(TAG, "Latched GevTimestamp: 0x%08x%08x us",
+                           (uint32_t)(latched_timestamp_us >> 32),
+                           (uint32_t)(latched_timestamp_us & 0xFFFFFFFF));
+        }
         return ESP_OK;
     }
 
@@ -669,7 +701,7 @@ static esp_err_t handle_write_memory_cmd_inline(uint32_t address, uint32_t value
     // Gain
     if (address == GENICAM_GAIN_OFFSET)
     {
-        if (value >= 0 && value <= 30) // Valid gain range 0-30 dB
+        if (value <= 30) // Valid gain range 0-30 dB (uint, lower bound implicit)
         {
             ESP_LOGI(TAG, "Set gain to %d dB", value);
             return camera_set_gain((int)value);
